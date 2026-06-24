@@ -12,7 +12,7 @@ Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 - Ask for the latest items across the feed, or narrow by *The Economist* section.
 - Use the RSS `category` tag as first-class section metadata, including sections such as `The World in Brief`, `The U.S. in Brief`, `Leaders`, `The United States`, `Business and Finance`, `Culture`, and `Obituary`.
 - Retrieve article text from the configured RSS feed when the feed provides it.
-- Use web search only as a secondary tool for external context, factual updates, or background that is not present in the RSS feed.
+- Default to *The Economist* RSS feed for answers; use web search only when the caller explicitly asks for outside context or the feed clearly cannot answer.
 - Keep private feed URLs, tokens, phone numbers, and provider credentials outside the public repository.
 
 ## Relationship To Phone Claw
@@ -22,7 +22,7 @@ Phone Claw provides the reference architecture:
 - Twilio receives the phone call.
 - A public webhook layer connects the call to ElevenLabs.
 - ElevenLabs handles the live voice conversation and calls webhook tools.
-- Tool endpoints fetch RSS data, run web search, and return compact voice-friendly results.
+- Tool endpoints fetch RSS data first and return compact voice-friendly results. Web search exists only as a narrow fallback for external context.
 
 Bartleby narrows that model to one domain: *The Economist*. It should be smaller, cleaner, and more opinionated than Phone Claw. It should not expose general email, GitHub, Claude Code, or personal assistant tools unless they become explicitly relevant later.
 
@@ -50,9 +50,11 @@ The ElevenLabs agent should have a small, explicit tool set:
 | `economist_recent` | Return recent feed entries, optionally filtered by section/category. |
 | `economist_search` | Search recent feed entries by keyword, section, and date range. |
 | `economist_article` | Retrieve the full text or longest available RSS text for a specific entry. |
-| `web_search` | Look up external background only when the RSS feed is insufficient. |
+| `web_search` | Look up external background only when the caller asks for non-Economist context or the RSS feed clearly does not contain the answer. |
 
 Tool responses should include stable entry IDs, title, URL, author when available, published date, section/category list, excerpt, and a short `answer_text` field that is safe for the voice agent to read aloud.
+
+The agent should never use `web_search` merely because a question is current, broad, or complicated. It should first check the Economist RSS tools, answer from those articles when possible, and only then use search if the user requested outside information or the RSS result establishes a real gap.
 
 ## RSS Feed Expectations
 
@@ -93,7 +95,9 @@ Bartleby should answer like an informed, concise reading companion:
 - Prefer *The Economist* RSS feed over web search.
 - Mention the article title and section when grounding an answer.
 - Distinguish what the article says from outside context.
-- Use web search only for questions like "what happened after this was published?", "who is this person?", or "is there newer information elsewhere?"
+- Use web search only when the caller explicitly asks for outside information, newer developments beyond an article, background on a person/place/company not explained in the article, or when RSS tools return no relevant Economist material.
+- Before using web search, try `economist_recent`, `economist_search`, or `economist_article` unless the caller has clearly asked for sources beyond *The Economist*.
+- When web search is used, state that the added context comes from outside *The Economist*.
 - Say when the feed has no matching article or when only an excerpt is available.
 - Keep spoken answers compact, then offer to go deeper.
 
