@@ -1,0 +1,24 @@
+{
+  "name": "bartleby",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phone-callable ElevenLabs voice agent for chatting with The Economist RSS feed.",
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/worker.mjs && node --check src/rss.mjs && node --check scripts/configure-elevenlabs.mjs && node --check scripts/provision-twilio-number.mjs && node --check scripts/smoke-test.mjs",
+    "test": "node --test test/*.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "d1:migrate:local": "wrangler d1 migrations apply bartleby --local",
+    "d1:migrate": "wrangler d1 migrations apply bartleby --remote",
+    "elevenlabs:configure": "node --env-file-if-exists=.env scripts/configure-elevenlabs.mjs",
+    "twilio:provision": "node --env-file-if-exists=.env scripts/provision-twilio-number.mjs",
+    "smoke:test": "node --env-file-if-exists=.env scripts/smoke-test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "wrangler": "^4.104.0"
+  }
+}

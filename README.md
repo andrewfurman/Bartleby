@@ -26,7 +26,7 @@ Phone Claw provides the reference architecture:
 
 Bartleby narrows that model to one domain: *The Economist*. It should be smaller, cleaner, and more opinionated than Phone Claw. It should not expose general email, GitHub, Claude Code, or personal assistant tools unless they become explicitly relevant later.
 
-## Intended Architecture
+## Implemented Architecture
 
 ```mermaid
 flowchart LR
@@ -36,9 +36,18 @@ flowchart LR
   ElevenLabs --> Tools[Bartleby tool endpoints]
   Tools --> RSS[Configured Economist RSS feed]
   Tools --> Search[Web search provider]
+  Webhook --> D1[Cloudflare D1 call log]
+  ElevenLabs --> PostCall[Post-call transcript webhook]
+  PostCall --> D1
 ```
 
-The public webhook service should be deployable independently, likely as a Cloudflare Worker or a small Node/Fastify service. A private bridge may be useful if the RSS feed URL includes subscriber credentials or tokens that should never live in public Worker config.
+The public webhook service is a Cloudflare Worker, not Fastify. It is deployed at:
+
+```text
+https://bartleby.aifurman.workers.dev
+```
+
+The Worker handles Twilio inbound calls, Economist RSS tools, narrow outside web search, ElevenLabs post-call transcript logging, and password/token-protected admin transcript reads. Call and transcript data are stored in Cloudflare D1 only. No EC2 box, R2 bucket, S3-compatible object store, or separate private bridge is required for the initial scope.
 
 ## Core Tool Surface
 
@@ -55,6 +64,29 @@ The ElevenLabs agent should have a small, explicit tool set:
 Tool responses should include stable entry IDs, title, URL, author when available, published date, section/category list, excerpt, and a short `answer_text` field that is safe for the voice agent to read aloud.
 
 The agent should never use `web_search` merely because a question is current, broad, or complicated. It should first check the Economist RSS tools, answer from those articles when possible, and only then use search if the user requested outside information or the RSS result establishes a real gap.
+
+## Call Logging
+
+Bartleby logs into Cloudflare D1:
+
+- Twilio inbound and status events
+- caller/called numbers and allow-list decision
+- ElevenLabs conversation ID
+- transcript turns
+- tool calls and tool results
+- analysis summary
+- metadata and conversation-initiation variables
+- full transcript text
+
+Admin reads are token protected:
+
+```text
+GET /admin/conversations
+GET /admin/conversations/:conversation_id
+GET /admin/calls/:twilio_call_sid
+```
+
+The Worker uses D1 for structured text logs only. It does not store audio blobs or raw webhook payload archives.
 
 ## RSS Feed Expectations
 
@@ -106,19 +138,24 @@ Bartleby should answer like an informed, concise reading companion:
 Expected runtime secrets and config:
 
 ```bash
+BARTLEBY_PUBLIC_BASE_URL=https://bartleby.aifurman.workers.dev
+BARTLEBY_TOOL_TOKEN=
+ADMIN_TOKEN=
+
 ELEVENLABS_API_KEY=
 ELEVENLABS_AGENT_ID=
 ELEVENLABS_API_BASE=https://api.elevenlabs.io
 ELEVENLABS_TELEPHONY_AUDIO_FORMAT=ulaw_8000
+ELEVENLABS_POST_CALL_TOKEN=
+ELEVENLABS_WEBHOOK_SECRET=
 
 TWILIO_PHONE_NUMBER=
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
 TWILIO_WEBHOOK_TOKEN=
 ALLOWED_CALLER_NUMBERS=
 
-BARTLEBY_TOOL_TOKEN=
-BARTLEBY_PUBLIC_BASE_URL=
-
-ECONOMIST_RSS_CONFIG_PATH=/etc/bartleby/rss-feeds.json
+ECONOMIST_RSS_URL=
 ECONOMIST_RSS_CACHE_SECONDS=900
 ECONOMIST_RSS_TIMEOUT_MS=12000
 
@@ -128,16 +165,63 @@ TAVILY_API_KEY=
 
 Do not commit `.env`, provider secrets, real phone numbers, subscriber RSS URLs, API keys, cookies, browser profiles, or exported configs that contain live operational identifiers.
 
+## Local Commands
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run checks:
+
+```bash
+npm run check
+npm test
+```
+
+Deploy Worker:
+
+```bash
+npm run deploy
+```
+
+Apply D1 migrations:
+
+```bash
+npm run d1:migrate
+```
+
+Configure or create the ElevenLabs Bartleby agent and tools:
+
+```bash
+npm run elevenlabs:configure
+```
+
+Buy a new Twilio US local number or update an existing one:
+
+```bash
+TWILIO_PURCHASE_CONFIRM=true npm run twilio:provision
+```
+
+Run smoke checks:
+
+```bash
+npm run smoke:test
+```
+
+The smoke test verifies deployed health, optionally checks the Economist tool, inserts a synthetic ElevenLabs post-call transcript into D1, reads it back through the admin API, and can start a real Twilio test call when `TEST_CALL_FROM_NUMBER` and `BARTLEBY_TWILIO_PHONE_NUMBER` are configured.
+
 ## Setup Plan
 
-1. Create an ElevenLabs Conversational AI agent named `Bartleby`.
-2. Configure telephony audio formats for Twilio: `ulaw_8000` for both user input and agent output.
-3. Deploy the public webhook service.
-4. Store provider secrets in the hosting platform's secret manager.
-5. Store the Economist RSS feed URL in a private config file or secret.
-6. Attach the Bartleby RSS and web-search tools to the ElevenLabs agent.
-7. Point the Twilio number's inbound webhook at the public service.
-8. Run a live conversation smoke test:
+1. Set `.env` from `.env.example` with ElevenLabs, Twilio, RSS, and auth values.
+2. Store Worker secrets with `wrangler secret put`.
+3. Run `npm run elevenlabs:configure`.
+4. Configure the ElevenLabs post-call transcription webhook to:
+   `https://bartleby.aifurman.workers.dev/elevenlabs/post-call?token=...`
+5. Run `TWILIO_PURCHASE_CONFIRM=true npm run twilio:provision`.
+6. Run `npm run smoke:test`.
+7. Run a live conversation smoke test:
    - "What is new in The World in Brief?"
    - "What are the latest U.S. stories?"
    - "Find recent Business and Finance pieces about AI."
@@ -160,13 +244,17 @@ The bot should summarize and discuss articles for the authorized caller. It shou
 
 ## Initial Scope
 
-This initial commit is a README scaffold only. The next implementation pass should add:
+The initial implementation includes:
 
-- a minimal webhook service
-- RSS parser with category preservation
-- cache and refresh behavior
-- ElevenLabs tool schemas
-- web search adapter
+- Cloudflare Worker webhook service
+- Cloudflare D1 schema and deployed D1 database
+- Economist RSS parser with category preservation
+- Economist sections/recent/search/article tools
+- narrow web-search fallback
 - Twilio inbound-call route
-- `.env.example`
-- smoke tests for RSS recent/search/article flows
+- ElevenLabs post-call transcript logging
+- admin transcript-read endpoints
+- ElevenLabs tool configuration script
+- Twilio number provisioning script
+- smoke test script
+- RSS parser tests

@@ -1,0 +1,18 @@
+name = "bartleby"
+main = "src/worker.mjs"
+compatibility_date = "2026-06-24"
+
+[observability]
+enabled = true
+
+[vars]
+ELEVENLABS_API_BASE = "https://api.elevenlabs.io"
+ELEVENLABS_TELEPHONY_AUDIO_FORMAT = "ulaw_8000"
+WEB_SEARCH_PROVIDER = "auto"
+ECONOMIST_RSS_CACHE_SECONDS = "900"
+ECONOMIST_RSS_TIMEOUT_MS = "12000"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bartleby"
+database_id = "b3a92ffb-34c5-4d4b-b178-3b864943015a"
