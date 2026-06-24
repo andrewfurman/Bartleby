@@ -480,6 +480,7 @@ function bootstrapEntry(item, { excerptChars = 220 } = {}) {
     categories: item.categories,
     content_source: item.content_source,
     full_text_available: item.full_text_available,
+    reading_time: item.reading_time,
     excerpt: truncate(item.summary || item.full_text || "", excerptChars).value,
   };
 }
@@ -525,8 +526,15 @@ function bootstrapContextText(result, recentArticles, usInBrief, worldInBrief) {
 function articleContextLine(item) {
   const published = item.published_at ? item.published_at.slice(0, 10) : "undated";
   const section = item.section || "Unsectioned";
+  const fullText =
+    item.full_text_available === true
+      ? " Full text: available in RSS."
+      : item.full_text_available === false
+        ? " Full text: excerpt/summary only in RSS."
+        : "";
+  const readingTime = item.reading_time ? ` Reading time: ${item.reading_time} min.` : "";
   const excerpt = item.excerpt ? ` Excerpt: ${item.excerpt}` : "";
-  return `[${published}] ${item.title} (${section}) ${item.url}.${excerpt}`;
+  return `[${published}] ${item.title} (${section}) ${item.url}.${fullText}${readingTime}${excerpt}`;
 }
 
 function entriesAnswerText(items, { query, section }) {
