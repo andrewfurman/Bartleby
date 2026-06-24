@@ -254,6 +254,10 @@ This public repo should contain implementation code, docs, and sanitized example
 
 The bot should summarize and discuss articles for the authorized caller. It should not republish full articles or expose subscriber feed data publicly.
 
+## Contribution Workflow
+
+All repository changes should go through pull requests rather than direct commits to `main`. Each PR should describe what changed and why; when a PR resolves a tracked GitHub issue, include the appropriate closing reference, such as `Closes #123`, so the issue history records the change.
+
 ## Initial Scope
 
 The initial implementation includes:
