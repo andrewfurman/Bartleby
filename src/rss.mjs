@@ -247,6 +247,7 @@ export async function loadEconomistFeed(env, { refresh = false } = {}) {
       headers: {
         accept: "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8",
         "user-agent": "bartleby-economist-rss/0.1",
+        ...(config.bearerToken ? { authorization: `Bearer ${config.bearerToken}` } : {}),
       },
     });
     const xml = await response.text();
@@ -407,6 +408,7 @@ function economistFeedConfig(env) {
       private: true,
       cache_seconds: env.ECONOMIST_RSS_CACHE_SECONDS,
       timeout_ms: env.ECONOMIST_RSS_TIMEOUT_MS,
+      bearer_token: env.ECONOMIST_RSS_BEARER_TOKEN || env.ECONOMIST_RSS_AUTH_TOKEN,
     },
     env
   );
@@ -426,6 +428,16 @@ function normalizeFeedConfig(feed, env) {
     60_000,
     DEFAULT_TIMEOUT_MS
   );
+  const bearerToken = normalize(
+    feed.bearer_token ||
+      feed.bearerToken ||
+      feed.auth_token ||
+      feed.authToken ||
+      (feed.auth_token_env ? env[feed.auth_token_env] : "") ||
+      (feed.authTokenEnv ? env[feed.authTokenEnv] : "") ||
+      env.ECONOMIST_RSS_BEARER_TOKEN ||
+      env.ECONOMIST_RSS_AUTH_TOKEN
+  );
 
   return {
     id: normalizeFeedId(feed.id || "economist"),
@@ -434,7 +446,8 @@ function normalizeFeedConfig(feed, env) {
     private: toBoolean(feed.private, true),
     cacheSeconds,
     timeoutMs,
-    cacheKey: `${url}|${cacheSeconds}`,
+    bearerToken,
+    cacheKey: `${url}|${cacheSeconds}|${Boolean(bearerToken)}`,
   };
 }
 

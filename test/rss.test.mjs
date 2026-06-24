@@ -99,6 +99,16 @@ describe("Economist RSS parsing", () => {
     assert.match(result.context_text, /The US in Brief: A big night in New York/);
   });
 
+  it("sends bearer auth when configured for a private RSS feed", async () => {
+    const env = {
+      ...feedEnv(sampleFeed),
+      ECONOMIST_RSS_BEARER_TOKEN: "private-feed-token",
+    };
+    await economistSections(env, { refresh: true });
+
+    assert.equal(globalThis.__lastFetchOptions.headers.authorization, "Bearer private-feed-token");
+  });
+
   it("filters by section and query", async () => {
     const env = feedEnv(sampleFeed);
     const result = await economistSearch(env, {
@@ -147,8 +157,10 @@ function feedEnv(xml) {
   };
 }
 
-globalThis.fetch = async () =>
-  new Response(globalThis.__testFeedXml || sampleFeed, {
+globalThis.fetch = async (_url, options = {}) => {
+  globalThis.__lastFetchOptions = options;
+  return new Response(globalThis.__testFeedXml || sampleFeed, {
     status: 200,
     headers: { "content-type": "application/rss+xml" },
   });
+};

@@ -2,7 +2,7 @@
 
 Bartleby is a phone-callable ElevenLabs voice agent for talking through recent articles from *The Economist*. The goal is simple: call Bartleby, ask what is new in *The Economist*, and have a conversation grounded primarily in the current RSS feed.
 
-This repository is intentionally standalone. It is modeled on the operating pattern of Andrew Furman's Phone Claw project, but it should not depend on Phone Claw code, configuration, deployment state, or the separate Economist newspaper RSS feed repository.
+This repository is intentionally standalone. It is modeled on the operating pattern of Andrew Furman's Phone Claw project, but it should not depend on Phone Claw code, configuration, or deployment state. Bartleby can consume Andrew's separate private Economist RSS server as a configured RSS source, but it should not import or duplicate that repository's subscriber-login/browser-fetch code.
 
 Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 
@@ -95,6 +95,17 @@ The Worker uses D1 for structured text logs only. It does not store audio blobs 
 
 Bartleby should support one or more configured Economist RSS or Atom feeds. The real feed URL should be configured through environment variables or a host-local secret file, not committed.
 
+For the best Economist coverage, point Bartleby at Andrew's private `economist-newspaper-rss-feed` server instead of the public Economist RSS feed. That service combines the public latest and section feeds, adds full-text subscriber article bodies when available, emits RSS `<category>` tags, and includes special authenticated handling for `The World in Brief`, which is not exposed as a normal dated item in the public RSS feeds.
+
+Configure the private feed as:
+
+```bash
+ECONOMIST_RSS_URL=https://private.example.com/rss.xml
+ECONOMIST_RSS_BEARER_TOKEN=replace-with-economist-feed-token
+```
+
+The private RSS server also supports `?token=...`, but `ECONOMIST_RSS_BEARER_TOKEN` keeps the token out of URLs and logs.
+
 Example private config shape:
 
 ```json
@@ -164,6 +175,7 @@ TWILIO_WEBHOOK_TOKEN=
 ALLOWED_CALLER_NUMBERS=
 
 ECONOMIST_RSS_URL=
+ECONOMIST_RSS_BEARER_TOKEN=
 ECONOMIST_RSS_CACHE_SECONDS=900
 ECONOMIST_RSS_TIMEOUT_MS=12000
 BARTLEBY_BOOTSTRAP_ARTICLE_LIMIT=200

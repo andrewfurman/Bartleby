@@ -49,6 +49,7 @@ export default {
         d1_configured: Boolean(env.DB),
         elevenlabs_agent_configured: Boolean(env.ELEVENLABS_API_KEY && env.ELEVENLABS_AGENT_ID),
         economist_rss_configured: Boolean(env.ECONOMIST_RSS_URL || env.ECONOMIST_RSS_CONFIG_JSON),
+        economist_rss_auth_configured: Boolean(env.ECONOMIST_RSS_BEARER_TOKEN || env.ECONOMIST_RSS_AUTH_TOKEN),
         tool_auth_configured: Boolean(env.BARTLEBY_TOOL_TOKEN),
         twilio_webhook_token_configured: Boolean(env.TWILIO_WEBHOOK_TOKEN),
         allowed_callers_configured: parseAllowedCallerNumbers(env.ALLOWED_CALLER_NUMBERS).length > 0,
