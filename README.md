@@ -12,6 +12,7 @@ Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 - Ask for the latest items across the feed, or narrow by *The Economist* section.
 - Use RSS `category` tags as first-class section metadata when present, including sections such as `The World in Brief`, `The U.S. in Brief`, `Leaders`, `The United States`, `Business and Finance`, `Culture`, and `Obituary`.
 - Fall back to conservative Economist URL/title section inference when public feeds omit category tags.
+- Preload startup context for each call: latest U.S. in Brief if present, latest World in Brief if present, and up to 200 recent Economist RSS articles.
 - Retrieve article text from the configured RSS feed when the feed provides it.
 - Default to *The Economist* RSS feed for answers; use web search only when the caller explicitly asks for outside context or the feed clearly cannot answer.
 - Keep private feed URLs, tokens, phone numbers, and provider credentials outside the public repository.
@@ -60,6 +61,7 @@ The ElevenLabs agent should have a small, explicit tool set:
 | `economist_recent` | Return recent feed entries, optionally filtered by section/category. |
 | `economist_search` | Search recent feed entries by keyword, section, and date range. |
 | `economist_article` | Retrieve the full text or longest available RSS text for a specific entry. |
+| `economist_bootstrap` | Build startup context with the latest briefs and recent-article index. Used by the Twilio inbound webhook before the first agent turn. |
 | `web_search` | Look up external background only when the caller asks for non-Economist context or the RSS feed clearly does not contain the answer. |
 
 Tool responses should include stable entry IDs, title, URL, author when available, published date, section/category list, excerpt, and a short `answer_text` field that is safe for the voice agent to read aloud.
@@ -164,6 +166,8 @@ ALLOWED_CALLER_NUMBERS=
 ECONOMIST_RSS_URL=
 ECONOMIST_RSS_CACHE_SECONDS=900
 ECONOMIST_RSS_TIMEOUT_MS=12000
+BARTLEBY_BOOTSTRAP_ARTICLE_LIMIT=200
+BARTLEBY_BOOTSTRAP_MAX_CHARS=60000
 
 WEB_SEARCH_PROVIDER=auto
 TAVILY_API_KEY=

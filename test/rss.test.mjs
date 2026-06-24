@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { economistArticle, economistSearch, economistSections, parseFeed } from "../src/rss.mjs";
+import { economistArticle, economistBootstrap, economistSearch, economistSections, parseFeed } from "../src/rss.mjs";
 
 const sampleFeed = `<?xml version="1.0"?>
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
@@ -39,6 +39,13 @@ const publicEconomistStyleFeed = `<?xml version="1.0"?>
       <pubDate>Wed, 24 Jun 2026 11:21:54 +0000</pubDate>
     </item>
     <item>
+      <title><![CDATA[The World in Brief: Tensions rise]]></title>
+      <description><![CDATA[A compact update on world news.]]></description>
+      <link>https://www.economist.com/the-world-in-brief/2026/06/24/tensions-rise</link>
+      <guid isPermaLink="false">world-brief</guid>
+      <pubDate>Wed, 24 Jun 2026 11:00:00 +0000</pubDate>
+    </item>
+    <item>
       <title><![CDATA[Don’t restrict Chinese biotech]]></title>
       <description><![CDATA[Patients benefit from faster, cheaper treatments.]]></description>
       <link>https://www.economist.com/leaders/2026/06/18/dont-restrict-chinese-biotech</link>
@@ -70,12 +77,26 @@ describe("Economist RSS parsing", () => {
       url: "https://www.economist.com/latest/rss.xml",
     });
 
-    assert.equal(parsed.items.length, 2);
+    assert.equal(parsed.items.length, 3);
     assert.equal(parsed.items[0].title, "The US in Brief: A big night in New York");
     assert.deepEqual(parsed.items[0].categories, ["The U.S. in Brief", "In Brief"]);
     assert.equal(parsed.items[0].section, "The U.S. in Brief");
-    assert.deepEqual(parsed.items[1].categories, ["Leaders"]);
-    assert.equal(parsed.items[1].section, "Leaders");
+    assert.deepEqual(parsed.items[1].categories, ["The World in Brief"]);
+    assert.equal(parsed.items[1].section, "The World in Brief");
+    assert.deepEqual(parsed.items[2].categories, ["Leaders"]);
+    assert.equal(parsed.items[2].section, "Leaders");
+  });
+
+  it("builds startup context with briefs and a bounded recent index", async () => {
+    const env = feedEnv(publicEconomistStyleFeed);
+    const result = await economistBootstrap(env, { limit: 2, refresh: true });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.recent_article_count, 2);
+    assert.equal(result.us_in_brief.title, "The US in Brief: A big night in New York");
+    assert.equal(result.world_in_brief.title, "The World in Brief: Tensions rise");
+    assert.match(result.context_text, /Most recent 2 Economist RSS articles/);
+    assert.match(result.context_text, /The US in Brief: A big night in New York/);
   });
 
   it("filters by section and query", async () => {
@@ -117,6 +138,7 @@ describe("Economist RSS parsing", () => {
 });
 
 function feedEnv(xml) {
+  globalThis.__testFeedXml = xml;
   return {
     ECONOMIST_RSS_URL: "https://example.com/feed.xml?token=secret",
     ECONOMIST_RSS_CACHE_SECONDS: "900",
@@ -126,7 +148,7 @@ function feedEnv(xml) {
 }
 
 globalThis.fetch = async () =>
-  new Response(sampleFeed, {
+  new Response(globalThis.__testFeedXml || sampleFeed, {
     status: 200,
     headers: { "content-type": "application/rss+xml" },
   });

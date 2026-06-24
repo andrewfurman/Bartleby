@@ -1,9 +1,11 @@
 const DEFAULT_LIMIT = 10;
-const MAX_LIMIT = 50;
+const MAX_LIMIT = 200;
 const DEFAULT_CACHE_SECONDS = 900;
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_EXCERPT_CHARS = 420;
 const DEFAULT_MAX_TEXT_CHARS = 60_000;
+const DEFAULT_BOOTSTRAP_LIMIT = 200;
+const DEFAULT_BOOTSTRAP_MAX_CHARS = 60_000;
 
 let feedCache = null;
 
@@ -62,34 +64,35 @@ export async function economistSearch(
   const before = dateSeconds(endDate);
   const boundedLimit = clampInteger(limit, 1, MAX_LIMIT, DEFAULT_LIMIT);
 
-  const items = result.items
-    .filter((item) => {
-      if (normalizedSection) {
-        const inSection = item.categories.some((category) =>
-          category.toLowerCase().includes(normalizedSection)
-        );
-        if (!inSection) return false;
-      }
+  const filteredItems = result.items.filter((item) => {
+    if (normalizedSection) {
+      const inSection = item.categories.some((category) =>
+        category.toLowerCase().includes(normalizedSection)
+      );
+      if (!inSection) return false;
+    }
 
-      const published = dateSeconds(item.published_at || item.updated_at);
-      if (after && published && published < after) return false;
-      if (before && published && published > before) return false;
+    const published = dateSeconds(item.published_at || item.updated_at);
+    if (after && published && published < after) return false;
+    if (before && published && published > before) return false;
 
-      if (normalizedQuery) {
-        const haystack = [
-          item.title,
-          item.author,
-          item.summary,
-          item.full_text,
-          item.categories.join(" "),
-        ]
-          .join(" ")
-          .toLowerCase();
-        if (!haystack.includes(normalizedQuery)) return false;
-      }
+    if (normalizedQuery) {
+      const haystack = [
+        item.title,
+        item.author,
+        item.summary,
+        item.full_text,
+        item.categories.join(" "),
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(normalizedQuery)) return false;
+    }
 
-      return true;
-    })
+    return true;
+  });
+
+  const items = filteredItems
     .sort(compareByPublishedDesc)
     .slice(0, boundedLimit)
     .map((item) => compactEntry(item));
@@ -104,10 +107,51 @@ export async function economistSearch(
     start_date: normalize(startDate),
     end_date: normalize(endDate),
     returned_count: items.length,
-    total_count: items.length,
+    total_count: filteredItems.length,
     feed: result.feed,
     items,
     answer_text: entriesAnswerText(items, { query, section }),
+  };
+}
+
+export async function economistBootstrap(env, options = {}) {
+  const result = await loadEconomistFeed(env, { refresh: options.refresh === true });
+  if (!result.ok) return result;
+
+  const limit = clampInteger(
+    options.limit || env.BARTLEBY_BOOTSTRAP_ARTICLE_LIMIT,
+    1,
+    MAX_LIMIT,
+    DEFAULT_BOOTSTRAP_LIMIT
+  );
+  const maxChars = clampInteger(
+    options.max_chars || env.BARTLEBY_BOOTSTRAP_MAX_CHARS,
+    10_000,
+    200_000,
+    DEFAULT_BOOTSTRAP_MAX_CHARS
+  );
+  const recentArticles = [...result.items]
+    .sort(compareByPublishedDesc)
+    .slice(0, limit)
+    .map((item) => bootstrapEntry(item));
+  const usInBrief = latestBriefEntry(result.items, "us");
+  const worldInBrief = latestBriefEntry(result.items, "world");
+  const contextText = truncate(bootstrapContextText(result, recentArticles, usInBrief, worldInBrief), maxChars);
+
+  return {
+    ok: true,
+    status: "ok",
+    provider: "economist_rss",
+    feed: result.feed,
+    fetched_at: result.fetched_at,
+    source_item_count: result.item_count,
+    recent_article_count: recentArticles.length,
+    us_in_brief: usInBrief ? bootstrapEntry(usInBrief, { excerptChars: 900 }) : null,
+    world_in_brief: worldInBrief ? bootstrapEntry(worldInBrief, { excerptChars: 900 }) : null,
+    recent_articles: recentArticles,
+    context_text: contextText.value,
+    context_truncated: contextText.truncated,
+    answer_text: `Loaded ${recentArticles.length} recent Economist RSS articles for call startup context.`,
   };
 }
 
@@ -411,6 +455,65 @@ function compactEntry(item, { excerptChars = DEFAULT_EXCERPT_CHARS } = {}) {
     reading_time: item.reading_time,
     excerpt: truncate(item.summary || item.full_text || "", excerptChars).value,
   };
+}
+
+function bootstrapEntry(item, { excerptChars = 220 } = {}) {
+  return {
+    id: item.id,
+    title: item.title,
+    url: item.url,
+    published_at: item.published_at,
+    section: item.section,
+    categories: item.categories,
+    content_source: item.content_source,
+    full_text_available: item.full_text_available,
+    excerpt: truncate(item.summary || item.full_text || "", excerptChars).value,
+  };
+}
+
+function latestBriefEntry(items, kind) {
+  const matcher = kind === "world" ? isWorldInBrief : isUsInBrief;
+  return [...items].sort(compareByPublishedDesc).find(matcher) || null;
+}
+
+function isUsInBrief(item) {
+  return item.categories.includes("The U.S. in Brief") || /^(the )?(us|u\.s\.|united states) in brief\b/i.test(item.title);
+}
+
+function isWorldInBrief(item) {
+  return (
+    item.categories.includes("The World in Brief") ||
+    /^(the )?world in brief\b/i.test(item.title) ||
+    /\/the-world-in-brief\//i.test(item.url)
+  );
+}
+
+function bootstrapContextText(result, recentArticles, usInBrief, worldInBrief) {
+  const lines = [
+    "Bartleby startup context from The Economist RSS feed.",
+    `Feed: ${result.feed.title || result.feed.id}. Fetched at: ${result.fetched_at}. Source entries parsed: ${result.item_count}.`,
+    "",
+    "Use this context before calling tools. For broad latest-article questions, scan the recent article index below before saying an article or section is missing.",
+    "",
+    "Latest U.S. in Brief:",
+    usInBrief ? articleContextLine(bootstrapEntry(usInBrief, { excerptChars: 700 })) : "Not found in the configured RSS feed.",
+    "",
+    "Latest World in Brief:",
+    worldInBrief
+      ? articleContextLine(bootstrapEntry(worldInBrief, { excerptChars: 700 }))
+      : "Not found in the configured RSS feed. If asked, say the current RSS feed did not include a World in Brief entry in the preloaded recent article index.",
+    "",
+    `Most recent ${recentArticles.length} Economist RSS articles:`,
+    ...recentArticles.map((item, index) => `${index + 1}. ${articleContextLine(item)}`),
+  ];
+  return lines.join("\n");
+}
+
+function articleContextLine(item) {
+  const published = item.published_at ? item.published_at.slice(0, 10) : "undated";
+  const section = item.section || "Unsectioned";
+  const excerpt = item.excerpt ? ` Excerpt: ${item.excerpt}` : "";
+  return `[${published}] ${item.title} (${section}) ${item.url}.${excerpt}`;
 }
 
 function entriesAnswerText(items, { query, section }) {

@@ -5,6 +5,9 @@ const toolToken = process.env.BARTLEBY_TOOL_TOKEN;
 const telephonyFormat = process.env.ELEVENLABS_TELEPHONY_AUDIO_FORMAT || "ulaw_8000";
 const agentName = process.env.ELEVENLABS_AGENT_NAME || "Bartleby Economist Bot";
 const postCallWebhookId = process.env.ELEVENLABS_POST_CALL_WEBHOOK_ID || "";
+const firstMessage =
+  process.env.ELEVENLABS_FIRST_MESSAGE ||
+  "Hello, this is Bartleby. I have The Economist's latest feed loaded. What would you like to discuss?";
 
 if (!apiKey) fail("Missing ELEVENLABS_API_KEY.");
 if (!publicBaseUrl) fail("Missing BARTLEBY_PUBLIC_BASE_URL.");
@@ -38,9 +41,7 @@ const platformSettings = configuredPlatformSettings(agent.platform_settings, pos
 
 conversationConfig.agent = {
   ...(conversationConfig.agent || {}),
-  first_message:
-    conversationConfig.agent?.first_message ||
-    "Hello, this is Bartleby. What would you like to discuss from The Economist?",
+  first_message: firstMessage,
   prompt: {
     ...currentPromptConfig,
     prompt: bartlebyPrompt(),
@@ -228,7 +229,7 @@ function configuredPlatformSettings(currentSettings, webhookId) {
 function articleListRequestProperties() {
   return {
     section: stringProperty("Optional Economist section/category such as The World in Brief, The U.S. in Brief, Leaders, Business and Finance, Culture, or Obituary."),
-    limit: integerProperty("Maximum entries to return. Use 5 by default for spoken answers."),
+    limit: integerProperty("Maximum entries to return. Use 200 for broad scans and 5 for short spoken lists."),
     start_date: stringProperty("Optional start date."),
     end_date: stringProperty("Optional end date."),
     refresh: booleanProperty("Whether to force-refresh the Economist RSS feed cache."),
@@ -395,12 +396,22 @@ function bartlebyPrompt() {
 
 Primary source policy:
 - Default to The Economist RSS tools for article lists, article search, and article discussion.
-- Use economist_recent for latest stories and section browsing.
+- Use the startup context first for latest stories and section browsing.
+- Use economist_recent for follow-up latest-story and section browsing. For broad scans, request limit 200, not 5.
 - Use economist_search for keyword, topic, person, company, country, and date questions.
 - Use economist_article before giving detail on a specific article.
 - Treat RSS category tags as Economist sections.
 - Mention article title and section when grounding an answer.
 - Say clearly when the RSS feed only provides an excerpt.
+
+Startup context:
+- At the start of every phone call, the webhook injects a startup context before Andrew speaks.
+- This context contains the latest U.S. in Brief entry when present, the latest World in Brief entry when present, and an index of up to 200 recent Economist RSS articles.
+- Use this context before making a tool call or saying that a section/article is missing.
+- If Andrew asks for World in Brief and the startup context says it was not found, say that the configured RSS feed did not include a World in Brief entry in the preloaded recent article index. Do not imply you checked only five articles.
+
+Injected startup context:
+{{bartleby_bootstrap_context}}
 
 Outside web search policy:
 - web_search is a narrow fallback, not the default.

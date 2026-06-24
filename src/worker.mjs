@@ -1,5 +1,6 @@
 import {
   economistArticle,
+  economistBootstrap,
   economistRecent,
   economistSearch,
   economistSections,
@@ -35,6 +36,7 @@ export default {
           economist_recent: "POST /tools/economist/recent",
           economist_search: "POST /tools/economist/search",
           economist_article: "POST /tools/economist/article",
+          economist_bootstrap: "POST /tools/economist/bootstrap",
           web_search: "POST /tools/web-search",
           admin_conversations: "GET /admin/conversations",
         },
@@ -96,6 +98,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/tools/economist/article") {
       return withToolAuth(request, env, async () => json(await economistArticle(env, await requestJson(request))));
+    }
+
+    if (request.method === "POST" && url.pathname === "/tools/economist/bootstrap") {
+      return withToolAuth(request, env, async () => json(await economistBootstrap(env, await requestJson(request))));
     }
 
     if (request.method === "POST" && url.pathname === "/tools/web-search") {
@@ -184,6 +190,7 @@ async function handleTwilioInbound(request, env) {
 
 async function registerElevenLabsCall(env, request, { fromNumber, toNumber, callSid, direction }) {
   const apiBase = env.ELEVENLABS_API_BASE || "https://api.elevenlabs.io";
+  const bootstrap = await economistBootstrap(env, {});
   const response = await fetch(`${apiBase}/v1/convai/twilio/register-call`, {
     method: "POST",
     headers: {
@@ -201,6 +208,11 @@ async function registerElevenLabsCall(env, request, { fromNumber, toNumber, call
           twilio_number: toNumber,
           twilio_call_sid: callSid || "",
           telephony_audio_format: env.ELEVENLABS_TELEPHONY_AUDIO_FORMAT || "ulaw_8000",
+          bartleby_bootstrap_status: bootstrap.ok ? "ok" : bootstrap.status || "error",
+          bartleby_bootstrap_context: bootstrap.ok ? bootstrap.context_text : bootstrap.answer_text || "",
+          bartleby_recent_article_count: bootstrap.ok ? String(bootstrap.recent_article_count) : "0",
+          bartleby_us_in_brief_title: bootstrap.ok && bootstrap.us_in_brief ? bootstrap.us_in_brief.title : "",
+          bartleby_world_in_brief_title: bootstrap.ok && bootstrap.world_in_brief ? bootstrap.world_in_brief.title : "",
         },
       },
     }),
@@ -399,8 +411,8 @@ async function storeElevenLabsEvent(env, event) {
   ];
 
   transcript.forEach((turn, index) => {
-    const toolCalls = Array.isArray(turn.tool_calls) ? turn.tool_calls : [];
-    const toolResults = Array.isArray(turn.tool_results) ? turn.tool_results : [];
+    const toolCalls = sanitizeForStorage(Array.isArray(turn.tool_calls) ? turn.tool_calls : []);
+    const toolResults = sanitizeForStorage(Array.isArray(turn.tool_results) ? turn.tool_results : []);
     statements.push(
       env.DB.prepare(
         `INSERT INTO transcript_turns (
@@ -697,6 +709,28 @@ function parseTwilioEventRow(row) {
     ...row,
     payload: parseMaybeJson(row.payload_json) || {},
   };
+}
+
+function sanitizeForStorage(value) {
+  if (Array.isArray(value)) return value.map((item) => sanitizeForStorage(item));
+  if (!value || typeof value !== "object") return redactSecretText(value);
+
+  const output = {};
+  for (const [key, child] of Object.entries(value)) {
+    output[key] = isSecretKey(key) ? "[redacted]" : sanitizeForStorage(child);
+  }
+  return output;
+}
+
+function isSecretKey(key) {
+  return /authorization|api[-_]?key|secret|token|password/i.test(String(key || ""));
+}
+
+function redactSecretText(value) {
+  if (typeof value !== "string") return value;
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/([?&]token=)[^&\s"'<]+/gi, "$1redacted");
 }
 
 async function validateElevenLabsWebhook(request, env, rawBody) {
