@@ -232,7 +232,9 @@ function configuredPlatformSettings(currentSettings, webhookId) {
 
 function articleListRequestProperties() {
   return {
-    section: stringProperty("Optional Economist section/category such as The World in Brief, The U.S. in Brief, Leaders, Business and Finance, Culture, or Obituary."),
+    section: stringProperty("Optional single Economist section/category. Examples: United States, Culture, Business, Finance and Economics, Leaders, Britain, Europe, The World in Brief."),
+    category: stringProperty("Alias for section. Use this when the caller says category instead of section."),
+    categories: stringArrayProperty("Optional Economist sections/categories to match any. Examples: Business, Finance and Economics."),
     limit: integerProperty("Maximum entries to return. Use 200 for broad scans and 5 for short spoken lists."),
     start_date: stringProperty("Optional start date."),
     end_date: stringProperty("Optional end date."),
@@ -247,6 +249,7 @@ function articleListResponseProperties() {
     answer_text: stringProperty("Compact spoken summary."),
     query: stringProperty("Search query when applicable."),
     section: stringProperty("Section filter when applicable."),
+    categories: stringArrayProperty("Resolved Economist section/category filters."),
     returned_count: integerProperty("Number of entries returned."),
     items: arrayProperty("Economist RSS entries.", articleProperty()),
   };
@@ -404,7 +407,8 @@ Primary source policy:
 - Default to The Economist RSS tools for article lists, article search, and article discussion.
 - Use the startup context first for latest stories and section browsing.
 - Use economist_recent for follow-up latest-story and section browsing. For broad scans, request limit 200, not 5.
-- Use economist_search for keyword, topic, person, company, country, and date questions.
+- For section browsing, pass a section/category filter such as United States, Culture, Business, Finance and Economics, Leaders, Britain, Europe, or The World in Brief.
+- Use economist_search for keyword, topic, person, company, country, and date questions, including within a section/category.
 - Use economist_article before giving detail on a specific article or answering whether full article text is available.
 - If Andrew asks you to use, test, check, or verify tools, make the requested Economist tool calls even when startup context already has enough information.
 - Treat RSS category tags as Economist sections.

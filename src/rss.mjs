@@ -49,26 +49,26 @@ export async function economistSearch(
   {
     query = "",
     section = "",
+    category = "",
+    categories = [],
     start_date: startDate = "",
     end_date: endDate = "",
     limit = DEFAULT_LIMIT,
     refresh = false,
   } = {}
 ) {
-  const result = await loadEconomistFeed(env, { refresh });
+  const normalizedQuery = normalize(query).toLowerCase();
+  const requestedSections = sectionFilters({ section, category, categories });
+  const result = await loadEconomistFeed(env, { refresh, categories: requestedSections });
   if (!result.ok) return result;
 
-  const normalizedQuery = normalize(query).toLowerCase();
-  const normalizedSection = normalize(section).toLowerCase();
   const after = dateSeconds(startDate);
   const before = dateSeconds(endDate);
   const boundedLimit = clampInteger(limit, 1, MAX_LIMIT, DEFAULT_LIMIT);
 
   const filteredItems = result.items.filter((item) => {
-    if (normalizedSection) {
-      const inSection = item.categories.some((category) =>
-        category.toLowerCase().includes(normalizedSection)
-      );
+    if (requestedSections.length) {
+      const inSection = requestedSections.some((requestedSection) => itemMatchesSection(item, requestedSection));
       if (!inSection) return false;
     }
 
@@ -103,14 +103,15 @@ export async function economistSearch(
     provider: "economist_rss",
     source: result.feed.id,
     query: normalize(query),
-    section: normalize(section),
+    section: requestedSections.join(", "),
+    categories: requestedSections,
     start_date: normalize(startDate),
     end_date: normalize(endDate),
     returned_count: items.length,
     total_count: filteredItems.length,
     feed: result.feed,
     items,
-    answer_text: entriesAnswerText(items, { query, section }),
+    answer_text: entriesAnswerText(items, { query, section: requestedSections.join(", ") }),
   };
 }
 
@@ -218,8 +219,8 @@ export async function economistArticle(
   };
 }
 
-export async function loadEconomistFeed(env, { refresh = false } = {}) {
-  const config = economistFeedConfig(env);
+export async function loadEconomistFeed(env, { refresh = false, categories = [] } = {}) {
+  const config = economistFeedConfig(env, { categories });
   if (!config.url) {
     return {
       ok: false,
@@ -386,14 +387,14 @@ function atomItem(block, feed) {
   };
 }
 
-function economistFeedConfig(env) {
+function economistFeedConfig(env, options = {}) {
   const json = normalize(env.ECONOMIST_RSS_CONFIG_JSON);
   if (json) {
     try {
       const parsed = JSON.parse(json);
       const feed = Array.isArray(parsed?.feeds) ? parsed.feeds[0] : Array.isArray(parsed) ? parsed[0] : parsed;
       if (feed?.url) {
-        return normalizeFeedConfig(feed, env);
+        return normalizeFeedConfig(feed, env, options);
       }
     } catch {
       // Fall through to the simple env var config.
@@ -410,12 +411,15 @@ function economistFeedConfig(env) {
       timeout_ms: env.ECONOMIST_RSS_TIMEOUT_MS,
       bearer_token: env.ECONOMIST_RSS_BEARER_TOKEN || env.ECONOMIST_RSS_AUTH_TOKEN,
     },
-    env
+    env,
+    options
   );
 }
 
-function normalizeFeedConfig(feed, env) {
-  const url = normalize(feed.url || feed.feed_url || feed.feedUrl);
+function normalizeFeedConfig(feed, env, { categories = [] } = {}) {
+  const baseUrl = normalize(feed.url || feed.feed_url || feed.feedUrl);
+  const categoryFilters = sectionFilters({ categories });
+  const url = categoryFilters.length ? categoryFilterUrl(baseUrl, categoryFilters) : baseUrl;
   const cacheSeconds = clampInteger(
     feed.cache_seconds || feed.cacheSeconds || env.ECONOMIST_RSS_CACHE_SECONDS,
     0,
@@ -447,7 +451,8 @@ function normalizeFeedConfig(feed, env) {
     cacheSeconds,
     timeoutMs,
     bearerToken,
-    cacheKey: `${url}|${cacheSeconds}|${Boolean(bearerToken)}`,
+    categoryFilters,
+    cacheKey: `${url}|${cacheSeconds}|${Boolean(bearerToken)}|${categoryFilters.join(",")}`,
   };
 }
 
@@ -491,7 +496,11 @@ function latestBriefEntry(items, kind) {
 }
 
 function isUsInBrief(item) {
-  return item.categories.includes("The U.S. in Brief") || /^(the )?(us|u\.s\.|united states) in brief\b/i.test(item.title);
+  return (
+    item.categories.includes("United States") ||
+    item.categories.includes("The U.S. in Brief") ||
+    /^(the )?(us|u\.s\.|united states) in brief\b/i.test(item.title)
+  );
 }
 
 function isWorldInBrief(item) {
@@ -599,9 +608,7 @@ function atomCategories(block) {
 }
 
 function inferredEconomistCategories({ title, url }) {
-  const categories = [];
-  const briefSection = inferredBriefSection(title);
-  if (briefSection) categories.push(briefSection);
+  const categories = inferredBriefSections(title);
 
   const pathSection = inferredPathSection(url);
   if (pathSection && !categories.includes(pathSection)) categories.push(pathSection);
@@ -609,11 +616,11 @@ function inferredEconomistCategories({ title, url }) {
   return categories;
 }
 
-function inferredBriefSection(title) {
+function inferredBriefSections(title) {
   const normalizedTitle = normalize(title).toLowerCase();
-  if (/^(the )?(us|u\.s\.|united states) in brief\b/.test(normalizedTitle)) return "The U.S. in Brief";
-  if (/^(the )?world in brief\b/.test(normalizedTitle)) return "The World in Brief";
-  return "";
+  if (/^(the )?(us|u\.s\.|united states) in brief\b/.test(normalizedTitle)) return ["In Brief", "United States"];
+  if (/^(the )?world in brief\b/.test(normalizedTitle)) return ["The World in Brief"];
+  return [];
 }
 
 function inferredPathSection(value) {
@@ -629,16 +636,16 @@ function inferredPathSection(value) {
     "in-brief": "In Brief",
     leaders: "Leaders",
     "by-invitation": "By Invitation",
-    "united-states": "The United States",
+    "united-states": "United States",
     britain: "Britain",
     europe: "Europe",
     americas: "The Americas",
     asia: "Asia",
     china: "China",
-    "middle-east-and-africa": "Middle East & Africa",
+    "middle-east-and-africa": "Middle East and Africa",
     business: "Business",
-    "finance-and-economics": "Finance & Economics",
-    "science-and-technology": "Science & Technology",
+    "finance-and-economics": "Finance and Economics",
+    "science-and-technology": "Science and Technology",
     culture: "Culture",
     obituary: "Obituary",
     "graphic-detail": "Graphic Detail",
@@ -747,6 +754,103 @@ function canonicalUrl(value) {
     return url.toString();
   } catch {
     return text;
+  }
+}
+
+function sectionFilters({ section = "", category = "", categories = [] } = {}) {
+  const rawValues = [
+    section,
+    category,
+    ...(Array.isArray(categories) ? categories : [categories]),
+  ];
+  const filters = [];
+  for (const value of rawValues) {
+    for (const part of String(value || "").split(",")) {
+      const expanded = expandSectionAlias(part);
+      for (const item of expanded) {
+        if (item && !filters.includes(item)) filters.push(item);
+      }
+    }
+  }
+  return filters;
+}
+
+function expandSectionAlias(value) {
+  const text = normalize(value);
+  if (!text) return [];
+  const key = text
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/\bu\.s\.\b/g, "us")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const aliases = {
+    us: ["United States"],
+    "u s": ["United States"],
+    usa: ["United States"],
+    america: ["United States"],
+    "the united states": ["United States"],
+    "united states": ["United States"],
+    "us in brief": ["United States"],
+    "u s in brief": ["United States"],
+    "the us in brief": ["United States"],
+    "the u s in brief": ["United States"],
+    "united states in brief": ["United States"],
+    "the united states in brief": ["United States"],
+    "world in brief": ["The World in Brief"],
+    "the world in brief": ["The World in Brief"],
+    "business and finance": ["Business", "Finance and Economics"],
+    business: ["Business"],
+    finance: ["Finance and Economics"],
+    "finance economics": ["Finance and Economics"],
+    "finance and economics": ["Finance and Economics"],
+    "middle east africa": ["Middle East and Africa"],
+    "middle east and africa": ["Middle East and Africa"],
+    "science technology": ["Science and Technology"],
+    "science and technology": ["Science and Technology"],
+    tech: ["Science and Technology"],
+    technology: ["Science and Technology"],
+    leaders: ["Leaders"],
+    leader: ["Leaders"],
+    "leader section": ["Leaders"],
+    obituaries: ["Obituary"],
+    obituary: ["Obituary"],
+  };
+  return aliases[key] || [text];
+}
+
+function itemMatchesSection(item, requestedSection) {
+  const requested = sectionComparable(requestedSection);
+  const labels = new Set([item.section, ...item.categories]);
+  if (isUsInBrief(item)) labels.add("United States");
+  if (isWorldInBrief(item)) labels.add("The World in Brief");
+  for (const label of labels) {
+    const comparable = sectionComparable(label);
+    if (!comparable) continue;
+    if (comparable === requested || comparable.includes(requested) || requested.includes(comparable)) return true;
+  }
+  return false;
+}
+
+function sectionComparable(value) {
+  return normalize(value)
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/\bu\.s\.\b/g, "us")
+    .replace(/^the\s+/, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function categoryFilterUrl(value, categories) {
+  try {
+    const url = new URL(value);
+    url.searchParams.delete("category");
+    url.searchParams.delete("categories");
+    for (const category of categories) url.searchParams.append("category", category);
+    return url.toString();
+  } catch {
+    return value;
   }
 }
 

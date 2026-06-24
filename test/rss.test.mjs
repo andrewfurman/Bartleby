@@ -79,8 +79,8 @@ describe("Economist RSS parsing", () => {
 
     assert.equal(parsed.items.length, 3);
     assert.equal(parsed.items[0].title, "The US in Brief: A big night in New York");
-    assert.deepEqual(parsed.items[0].categories, ["The U.S. in Brief", "In Brief"]);
-    assert.equal(parsed.items[0].section, "The U.S. in Brief");
+    assert.deepEqual(parsed.items[0].categories, ["In Brief", "United States"]);
+    assert.equal(parsed.items[0].section, "In Brief");
     assert.deepEqual(parsed.items[1].categories, ["The World in Brief"]);
     assert.equal(parsed.items[1].section, "The World in Brief");
     assert.deepEqual(parsed.items[2].categories, ["Leaders"]);
@@ -121,6 +121,23 @@ describe("Economist RSS parsing", () => {
     assert.equal(result.ok, true);
     assert.equal(result.returned_count, 1);
     assert.equal(result.items[0].title, "America tests a new policy");
+    assert.match(globalThis.__lastFetchUrl, /[?&]category=United\+States(?:&|$)/);
+  });
+
+  it("supports section aliases and multi-category section filters", async () => {
+    const env = feedEnv(sampleFeed);
+    const result = await economistSearch(env, {
+      section: "Business and Finance",
+      limit: 5,
+      refresh: true,
+    });
+
+    const url = new URL(globalThis.__lastFetchUrl);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.returned_count, 1);
+    assert.equal(result.items[0].title, "Markets in brief");
+    assert.deepEqual(url.searchParams.getAll("category"), ["Business", "Finance and Economics"]);
   });
 
   it("lists sections by category counts", async () => {
@@ -158,6 +175,7 @@ function feedEnv(xml) {
 }
 
 globalThis.fetch = async (_url, options = {}) => {
+  globalThis.__lastFetchUrl = String(_url);
   globalThis.__lastFetchOptions = options;
   return new Response(globalThis.__testFeedXml || sampleFeed, {
     status: 200,

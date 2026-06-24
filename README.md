@@ -97,6 +97,8 @@ Bartleby should support one or more configured Economist RSS or Atom feeds. The 
 
 For the best Economist coverage, point Bartleby at Andrew's private `economist-newspaper-rss-feed` server instead of the public Economist RSS feed. That service combines the public latest and section feeds, adds full-text subscriber article bodies when available, emits RSS `<category>` tags, and includes special authenticated handling for `The World in Brief`, which is not exposed as a normal dated item in the public RSS feeds.
 
+Bartleby uses the private RSS server's category-filtering extension for section queries. Calls such as `economist_recent` or `economist_search` with `section: "United States"` fetch the feed with `category=United%20States`, then apply a local category fallback. This also supports sections such as `Culture`, `Business`, `Finance and Economics`, `Leaders`, `Britain`, `Europe`, and `The World in Brief`.
+
 Configure the private feed as:
 
 ```bash
