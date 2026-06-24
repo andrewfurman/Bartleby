@@ -175,6 +175,10 @@ function toolConfigs() {
         answer_text: stringProperty("Compact spoken summary."),
         access_note: stringProperty("Note when the RSS feed only provides an excerpt."),
         full_article_available: booleanProperty("Whether full article text appears available from the RSS entry."),
+        content_source: stringProperty("RSS source for the returned text, such as feed_content_encoded or feed_summary."),
+        full_text_chars: integerProperty("Total available article text characters in the RSS entry."),
+        returned_text_chars: integerProperty("Number of article text characters returned to the agent."),
+        full_text_truncated: booleanProperty("Whether the returned full_text was truncated by max_text_chars."),
         full_text: stringProperty("Article text or excerpt from RSS."),
         entry: objectProperty("Economist RSS entry.", articleProperty()),
       },
@@ -257,7 +261,9 @@ function articleProperty() {
     published_at: stringProperty("Publication timestamp."),
     section: stringProperty("Primary Economist section/category."),
     categories: stringArrayProperty("All RSS category tags."),
+    content_source: stringProperty("RSS source for the entry text, such as feed_content_encoded or feed_summary."),
     full_text_available: booleanProperty("Whether full article text appears available."),
+    reading_time: integerProperty("Estimated reading time in minutes."),
     excerpt: stringProperty("Short excerpt from the RSS entry."),
   };
 }
@@ -400,6 +406,7 @@ Primary source policy:
 - Use economist_recent for follow-up latest-story and section browsing. For broad scans, request limit 200, not 5.
 - Use economist_search for keyword, topic, person, company, country, and date questions.
 - Use economist_article before giving detail on a specific article or answering whether full article text is available.
+- If Andrew asks you to use, test, check, or verify tools, make the requested Economist tool calls even when startup context already has enough information.
 - Treat RSS category tags as Economist sections.
 - Mention article title and section when grounding an answer.
 - Say clearly when the RSS feed only provides an excerpt.
