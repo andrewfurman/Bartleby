@@ -459,10 +459,10 @@ async function upsertCallFromTwilio(env, data) {
       duration_secs = COALESCE(excluded.duration_secs, calls.duration_secs),
       metadata_json = COALESCE(NULLIF(excluded.metadata_json, '{}'), calls.metadata_json),
       updated_at = excluded.updated_at`
-  )
+    )
     .bind(
       data.twilio_call_sid,
-      data.elevenlabs_conversation_id || "",
+      nullableText(data.elevenlabs_conversation_id),
       data.agent_id || "",
       data.caller_number || "",
       data.called_number || "",
@@ -926,6 +926,11 @@ function parseMaybeJson(value) {
 
 function normalize(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function nullableText(value) {
+  const text = normalize(value);
+  return text || null;
 }
 
 function normalizeDate(value) {

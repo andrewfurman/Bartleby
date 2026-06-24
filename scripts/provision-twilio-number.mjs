@@ -1,13 +1,20 @@
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
+const apiKeySid = process.env.TWILIO_API_KEY_SID || process.env.TWILIO_API_SID;
+const apiKeySecret = process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_API_SECRET;
 const publicBaseUrl = stripTrailingSlash(process.env.BARTLEBY_PUBLIC_BASE_URL || "");
 const webhookToken = process.env.TWILIO_WEBHOOK_TOKEN || "";
 const preferredAreaCode = process.env.TWILIO_AREA_CODE || "";
+const preferredPostalCode = process.env.TWILIO_POSTAL_CODE || "";
+const requireSms = process.env.TWILIO_REQUIRE_SMS === "true";
 const existingNumber = process.env.BARTLEBY_TWILIO_PHONE_NUMBER || "";
 const confirmPurchase =
   process.env.TWILIO_PURCHASE_CONFIRM === "true" || process.argv.includes("--yes");
 
-if (!accountSid || !authToken) fail("Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN.");
+if (!accountSid) fail("Missing TWILIO_ACCOUNT_SID.");
+if (!authToken && !(apiKeySid && apiKeySecret)) {
+  fail("Missing TWILIO_AUTH_TOKEN, or TWILIO_API_KEY_SID plus TWILIO_API_KEY_SECRET.");
+}
 if (!publicBaseUrl) fail("Missing BARTLEBY_PUBLIC_BASE_URL.");
 
 const voiceUrl = `${publicBaseUrl}/twilio/inbound${webhookToken ? `?token=${encodeURIComponent(webhookToken)}` : ""}`;
@@ -22,8 +29,8 @@ if (existingNumber) {
         action: "updated_existing_number",
         phone_number: updated.phone_number,
         sid: updated.sid,
-        voice_url: updated.voice_url,
-        status_callback: updated.status_callback,
+        voice_url: redactUrl(updated.voice_url),
+        status_callback: redactUrl(updated.status_callback),
       },
       null,
       2
@@ -64,8 +71,8 @@ console.log(
       action: "purchased_number",
       phone_number: purchased.phone_number,
       sid: purchased.sid,
-      voice_url: purchased.voice_url,
-      status_callback: purchased.status_callback,
+      voice_url: redactUrl(purchased.voice_url),
+      status_callback: redactUrl(purchased.status_callback),
     },
     null,
     2
@@ -75,9 +82,10 @@ console.log(
 async function findAvailableNumbers() {
   const url = twilioUrl(`/AvailablePhoneNumbers/US/Local.json`);
   url.searchParams.set("VoiceEnabled", "true");
-  url.searchParams.set("SmsEnabled", "true");
+  if (requireSms) url.searchParams.set("SmsEnabled", "true");
   url.searchParams.set("PageSize", "20");
   if (preferredAreaCode) url.searchParams.set("AreaCode", preferredAreaCode);
+  if (preferredPostalCode) url.searchParams.set("InPostalCode", preferredPostalCode);
   url.searchParams.set("ExcludeAllAddressRequired", "true");
   const body = await twilioRequest(url.toString());
   return body.available_phone_numbers || [];
@@ -120,7 +128,7 @@ async function twilioRequest(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
+      authorization: `Basic ${Buffer.from(`${apiKeySid || accountSid}:${apiKeySecret || authToken}`).toString("base64")}`,
       ...(options.body ? { "content-type": "application/x-www-form-urlencoded" } : {}),
     },
     body: options.body,
@@ -143,6 +151,17 @@ function twilioForm(values) {
     if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
   }
   return params;
+}
+
+function redactUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    if (url.searchParams.has("token")) url.searchParams.set("token", "redacted");
+    return url.toString();
+  } catch {
+    return String(value).replace(/token=[^&\s]+/g, "token=redacted");
+  }
 }
 
 function stripTrailingSlash(value) {

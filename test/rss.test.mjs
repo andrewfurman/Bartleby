@@ -25,6 +25,29 @@ const sampleFeed = `<?xml version="1.0"?>
   </channel>
 </rss>`;
 
+const publicEconomistStyleFeed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>Latest Updates</title>
+    <item>
+      <title>
+        <![CDATA[The US in Brief: A big night in New York]]>
+      </title>
+      <description><![CDATA[Our daily political update.]]></description>
+      <link>https://www.economist.com/in-brief/2026/06/24/the-us-in-brief-a-big-night-in-new-york</link>
+      <guid isPermaLink="false">us-brief</guid>
+      <pubDate>Wed, 24 Jun 2026 11:21:54 +0000</pubDate>
+    </item>
+    <item>
+      <title><![CDATA[Don’t restrict Chinese biotech]]></title>
+      <description><![CDATA[Patients benefit from faster, cheaper treatments.]]></description>
+      <link>https://www.economist.com/leaders/2026/06/18/dont-restrict-chinese-biotech</link>
+      <guid isPermaLink="false">leaders-biotech</guid>
+      <pubDate>Thu, 18 Jun 2026 12:45:58 +0000</pubDate>
+    </item>
+  </channel>
+</rss>`;
+
 describe("Economist RSS parsing", () => {
   it("preserves RSS category tags as sections", () => {
     const parsed = parseFeed(sampleFeed, {
@@ -38,6 +61,21 @@ describe("Economist RSS parsing", () => {
     assert.deepEqual(parsed.items[0].categories, ["The United States", "Politics"]);
     assert.equal(parsed.items[0].section, "The United States");
     assert.equal(parsed.feed.feed_url, "https://example.com/feed.xml?token=redacted");
+  });
+
+  it("infers Economist sections when public RSS omits category tags", () => {
+    const parsed = parseFeed(publicEconomistStyleFeed, {
+      id: "economist",
+      title: "The Economist",
+      url: "https://www.economist.com/latest/rss.xml",
+    });
+
+    assert.equal(parsed.items.length, 2);
+    assert.equal(parsed.items[0].title, "The US in Brief: A big night in New York");
+    assert.deepEqual(parsed.items[0].categories, ["The U.S. in Brief", "In Brief"]);
+    assert.equal(parsed.items[0].section, "The U.S. in Brief");
+    assert.deepEqual(parsed.items[1].categories, ["Leaders"]);
+    assert.equal(parsed.items[1].section, "Leaders");
   });
 
   it("filters by section and query", async () => {

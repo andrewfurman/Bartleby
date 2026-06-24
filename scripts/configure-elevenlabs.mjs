@@ -3,6 +3,8 @@ const apiKey = process.env.ELEVENLABS_API_KEY;
 const publicBaseUrl = stripTrailingSlash(process.env.BARTLEBY_PUBLIC_BASE_URL || "");
 const toolToken = process.env.BARTLEBY_TOOL_TOKEN;
 const telephonyFormat = process.env.ELEVENLABS_TELEPHONY_AUDIO_FORMAT || "ulaw_8000";
+const agentName = process.env.ELEVENLABS_AGENT_NAME || "Bartleby Economist Bot";
+const postCallWebhookId = process.env.ELEVENLABS_POST_CALL_WEBHOOK_ID || "";
 
 if (!apiKey) fail("Missing ELEVENLABS_API_KEY.");
 if (!publicBaseUrl) fail("Missing BARTLEBY_PUBLIC_BASE_URL.");
@@ -13,7 +15,7 @@ if (!agentId) {
   const created = await requestJson(`${apiBase}/v1/convai/agents/create`, {
     method: "POST",
     body: JSON.stringify({
-      name: "Bartleby",
+      name: agentName,
       conversation_config: {},
       tags: ["bartleby", "economist", "phone"],
     }),
@@ -28,9 +30,11 @@ for (const config of toolConfigs()) {
 
 const agent = await requestJson(`${apiBase}/v1/convai/agents/${agentId}`);
 const conversationConfig = structuredClone(agent.conversation_config || {});
-const currentPromptConfig = conversationConfig.agent?.prompt || {};
+const currentPromptConfig = { ...(conversationConfig.agent?.prompt || {}) };
+delete currentPromptConfig.tools;
 const currentToolIds = currentPromptConfig.tool_ids || [];
 const nextToolIds = unique([...currentToolIds, ...tools.map((tool) => tool.id)]);
+const platformSettings = configuredPlatformSettings(agent.platform_settings, postCallWebhookId);
 
 conversationConfig.agent = {
   ...(conversationConfig.agent || {}),
@@ -55,7 +59,9 @@ conversationConfig.tts = {
 const updated = await requestJson(`${apiBase}/v1/convai/agents/${agentId}`, {
   method: "PATCH",
   body: JSON.stringify({
+    name: agentName,
     conversation_config: conversationConfig,
+    ...(platformSettings ? { platform_settings: platformSettings } : {}),
     version_description: "Configure Bartleby Economist RSS tools",
   }),
 });
@@ -71,8 +77,9 @@ console.log(
       })),
       next_steps: [
         "Set ELEVENLABS_AGENT_ID as a Worker secret or env var.",
-        "Create an ElevenLabs post-call transcription webhook pointing at /elevenlabs/post-call?token=...",
-        "Set the webhook token as ELEVENLABS_POST_CALL_TOKEN on the Worker.",
+        "Create an ElevenLabs post-call transcription webhook pointing at /elevenlabs/post-call.",
+        "Set ELEVENLABS_POST_CALL_WEBHOOK_ID before configuring if the agent should be attached automatically.",
+        "Set ELEVENLABS_WEBHOOK_SECRET for HMAC verification, or use ELEVENLABS_POST_CALL_TOKEN with a token URL.",
       ],
     },
     null,
@@ -200,6 +207,22 @@ function toolConfigs() {
       },
     }),
   ];
+}
+
+function configuredPlatformSettings(currentSettings, webhookId) {
+  if (!webhookId) return null;
+  const platformSettings = structuredClone(currentSettings || {});
+  platformSettings.workspace_overrides = {
+    ...(platformSettings.workspace_overrides || {}),
+    webhooks: {
+      ...(platformSettings.workspace_overrides?.webhooks || {}),
+      post_call_webhook_id: webhookId,
+      events: ["transcript"],
+      transcript_format: "json",
+      send_audio: false,
+    },
+  };
+  return platformSettings;
 }
 
 function articleListRequestProperties() {

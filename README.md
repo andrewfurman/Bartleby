@@ -10,7 +10,8 @@ Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 
 - Call a phone number and talk to an ElevenLabs Conversational AI agent named Bartleby.
 - Ask for the latest items across the feed, or narrow by *The Economist* section.
-- Use the RSS `category` tag as first-class section metadata, including sections such as `The World in Brief`, `The U.S. in Brief`, `Leaders`, `The United States`, `Business and Finance`, `Culture`, and `Obituary`.
+- Use RSS `category` tags as first-class section metadata when present, including sections such as `The World in Brief`, `The U.S. in Brief`, `Leaders`, `The United States`, `Business and Finance`, `Culture`, and `Obituary`.
+- Fall back to conservative Economist URL/title section inference when public feeds omit category tags.
 - Retrieve article text from the configured RSS feed when the feed provides it.
 - Default to *The Economist* RSS feed for answers; use web search only when the caller explicitly asks for outside context or the feed clearly cannot answer.
 - Keep private feed URLs, tokens, phone numbers, and provider credentials outside the public repository.
@@ -55,7 +56,7 @@ The ElevenLabs agent should have a small, explicit tool set:
 
 | Tool | Purpose |
 | --- | --- |
-| `economist_sections` | List known sections discovered from RSS `category` tags. |
+| `economist_sections` | List known sections discovered from RSS `category` tags or inferred Economist URL/title sections. |
 | `economist_recent` | Return recent feed entries, optionally filtered by section/category. |
 | `economist_search` | Search recent feed entries by keyword, section, and date range. |
 | `economist_article` | Retrieve the full text or longest available RSS text for a specific entry. |
@@ -118,6 +119,8 @@ The parser should preserve:
 - `category` tags as sections
 - `description`, `summary`, `content`, or `content:encoded`
 
+If a feed omits `category` tags, Bartleby derives a section from Economist URL paths such as `/leaders/`, `/united-states/`, `/finance-and-economics/`, and brief-style titles such as `The US in Brief`.
+
 If the feed only includes an excerpt, Bartleby should say that clearly instead of implying full-text access.
 
 ## Agent Behavior
@@ -146,12 +149,15 @@ ELEVENLABS_API_KEY=
 ELEVENLABS_AGENT_ID=
 ELEVENLABS_API_BASE=https://api.elevenlabs.io
 ELEVENLABS_TELEPHONY_AUDIO_FORMAT=ulaw_8000
+ELEVENLABS_POST_CALL_WEBHOOK_ID=
 ELEVENLABS_POST_CALL_TOKEN=
 ELEVENLABS_WEBHOOK_SECRET=
 
 TWILIO_PHONE_NUMBER=
 TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
+TWILIO_API_KEY_SID=
+TWILIO_API_KEY_SECRET=
 TWILIO_WEBHOOK_TOKEN=
 ALLOWED_CALLER_NUMBERS=
 
@@ -210,7 +216,7 @@ Run smoke checks:
 npm run smoke:test
 ```
 
-The smoke test verifies deployed health, optionally checks the Economist tool, inserts a synthetic ElevenLabs post-call transcript into D1, reads it back through the admin API, and can start a real Twilio test call when `TEST_CALL_FROM_NUMBER` and `BARTLEBY_TWILIO_PHONE_NUMBER` are configured.
+The smoke test verifies deployed health, optionally checks the Economist tool, inserts a synthetic ElevenLabs post-call transcript into D1, reads it back through the admin API, and can start a real Twilio test call when Twilio credentials, `TEST_CALL_FROM_NUMBER`, and `BARTLEBY_TWILIO_PHONE_NUMBER` are configured.
 
 ## Setup Plan
 
@@ -218,10 +224,12 @@ The smoke test verifies deployed health, optionally checks the Economist tool, i
 2. Store Worker secrets with `wrangler secret put`.
 3. Run `npm run elevenlabs:configure`.
 4. Configure the ElevenLabs post-call transcription webhook to:
-   `https://bartleby.aifurman.workers.dev/elevenlabs/post-call?token=...`
-5. Run `TWILIO_PURCHASE_CONFIRM=true npm run twilio:provision`.
-6. Run `npm run smoke:test`.
-7. Run a live conversation smoke test:
+   `https://bartleby.aifurman.workers.dev/elevenlabs/post-call`
+   Use HMAC verification via `ELEVENLABS_WEBHOOK_SECRET`, or use `ELEVENLABS_POST_CALL_TOKEN` with a `?token=...` URL for a simpler token-protected setup.
+5. Set `ELEVENLABS_POST_CALL_WEBHOOK_ID` before running `npm run elevenlabs:configure` so the agent is attached to that post-call webhook.
+6. Run `TWILIO_PURCHASE_CONFIRM=true npm run twilio:provision`.
+7. Run `npm run smoke:test`.
+8. Run a live conversation smoke test:
    - "What is new in The World in Brief?"
    - "What are the latest U.S. stories?"
    - "Find recent Business and Finance pieces about AI."

@@ -25,7 +25,7 @@ if (postCallToken && adminToken) {
   });
 }
 
-if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TEST_CALL_FROM_NUMBER && process.env.BARTLEBY_TWILIO_PHONE_NUMBER) {
+if (hasTwilioCredentials() && process.env.TEST_CALL_FROM_NUMBER && process.env.BARTLEBY_TWILIO_PHONE_NUMBER) {
   results.push(await startTwilioTestCall());
 } else {
   results.push({
@@ -33,7 +33,7 @@ if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.e
     ok: false,
     skipped: true,
     reason:
-      "Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TEST_CALL_FROM_NUMBER, and BARTLEBY_TWILIO_PHONE_NUMBER to place a phone test call.",
+      "Set TWILIO_ACCOUNT_SID plus TWILIO_AUTH_TOKEN or API key credentials, TEST_CALL_FROM_NUMBER, and BARTLEBY_TWILIO_PHONE_NUMBER to place a phone test call.",
   });
 }
 
@@ -159,7 +159,6 @@ async function checkPostCallLogging() {
 
 async function startTwilioTestCall() {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TEST_CALL_FROM_NUMBER;
   const to = process.env.BARTLEBY_TWILIO_PHONE_NUMBER;
   const webhookToken = process.env.TWILIO_WEBHOOK_TOKEN || "";
@@ -168,7 +167,7 @@ async function startTwilioTestCall() {
   const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`, {
     method: "POST",
     headers: {
-      authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
+      authorization: twilioBasicAuth(),
       "content-type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
@@ -187,6 +186,23 @@ async function startTwilioTestCall() {
     to,
     from,
   };
+}
+
+function hasTwilioCredentials() {
+  return Boolean(
+    process.env.TWILIO_ACCOUNT_SID &&
+      (process.env.TWILIO_AUTH_TOKEN ||
+        ((process.env.TWILIO_API_KEY_SID || process.env.TWILIO_API_SID) &&
+          (process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_API_SECRET)))
+  );
+}
+
+function twilioBasicAuth() {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const apiKeySid = process.env.TWILIO_API_KEY_SID || process.env.TWILIO_API_SID;
+  const apiKeySecret = process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_API_SECRET;
+  return `Basic ${Buffer.from(`${apiKeySid || accountSid}:${apiKeySecret || authToken}`).toString("base64")}`;
 }
 
 function stripTrailingSlash(value) {

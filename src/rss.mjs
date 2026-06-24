@@ -280,7 +280,8 @@ export function parseFeed(xml, feedConfig = {}) {
 function rssItem(block, feed) {
   const title = tagText(block, "title");
   const url = normalize(tagText(block, "link") || tagText(block, "guid"));
-  const categories = tagTexts(block, "category").filter(Boolean);
+  const explicitCategories = tagTexts(block, "category").filter(Boolean);
+  const categories = explicitCategories.length ? explicitCategories : inferredEconomistCategories({ title, url });
   const contentHtml = tagText(block, "content:encoded") || tagText(block, "encoded");
   const summaryHtml = tagText(block, "description") || tagText(block, "summary");
   const fullText = normalizeArticleText(htmlToText(contentHtml || summaryHtml));
@@ -312,7 +313,8 @@ function rssItem(block, feed) {
 function atomItem(block, feed) {
   const title = tagText(block, "title");
   const url = atomLink(block) || tagText(block, "id");
-  const categories = atomCategories(block);
+  const explicitCategories = atomCategories(block);
+  const categories = explicitCategories.length ? explicitCategories : inferredEconomistCategories({ title, url });
   const contentHtml = tagText(block, "content");
   const summaryHtml = tagText(block, "summary");
   const fullText = normalizeArticleText(htmlToText(contentHtml || summaryHtml));
@@ -472,6 +474,71 @@ function atomCategories(block) {
   return categories;
 }
 
+function inferredEconomistCategories({ title, url }) {
+  const categories = [];
+  const briefSection = inferredBriefSection(title);
+  if (briefSection) categories.push(briefSection);
+
+  const pathSection = inferredPathSection(url);
+  if (pathSection && !categories.includes(pathSection)) categories.push(pathSection);
+
+  return categories;
+}
+
+function inferredBriefSection(title) {
+  const normalizedTitle = normalize(title).toLowerCase();
+  if (/^(the )?(us|u\.s\.|united states) in brief\b/.test(normalizedTitle)) return "The U.S. in Brief";
+  if (/^(the )?world in brief\b/.test(normalizedTitle)) return "The World in Brief";
+  return "";
+}
+
+function inferredPathSection(value) {
+  let firstSegment = "";
+  try {
+    firstSegment = new URL(value).pathname.split("/").filter(Boolean)[0] || "";
+  } catch {
+    firstSegment = String(value || "").split("/").filter(Boolean)[0] || "";
+  }
+
+  const sections = {
+    "the-world-in-brief": "The World in Brief",
+    "in-brief": "In Brief",
+    leaders: "Leaders",
+    "by-invitation": "By Invitation",
+    "united-states": "The United States",
+    britain: "Britain",
+    europe: "Europe",
+    americas: "The Americas",
+    asia: "Asia",
+    china: "China",
+    "middle-east-and-africa": "Middle East & Africa",
+    business: "Business",
+    "finance-and-economics": "Finance & Economics",
+    "science-and-technology": "Science & Technology",
+    culture: "Culture",
+    obituary: "Obituary",
+    "graphic-detail": "Graphic Detail",
+    "the-economist-explains": "The Economist Explains",
+    "special-report": "Special Report",
+    "technology-quarterly": "Technology Quarterly",
+    "schools-brief": "Schools Brief",
+    podcasts: "Podcasts",
+    interactive: "Interactive",
+    "international": "International",
+    "1843": "1843",
+  };
+
+  return sections[firstSegment.toLowerCase()] || titleCaseSlug(firstSegment);
+}
+
+function titleCaseSlug(value) {
+  return String(value || "")
+    .split("-")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function htmlToText(html) {
   return decodeXml(
     stripCdata(String(html || ""))
@@ -495,7 +562,9 @@ function decodeXml(value) {
 }
 
 function stripCdata(value) {
-  return String(value || "").replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "");
+  const text = String(value || "").trim();
+  const match = text.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
+  return match ? match[1] : text;
 }
 
 function normalizeArticleText(value) {
