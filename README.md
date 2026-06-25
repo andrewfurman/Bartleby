@@ -147,7 +147,10 @@ Bartleby should answer like an informed, concise reading companion:
 - Distinguish what the article says from outside context.
 - Use web search only when the caller explicitly asks for outside information, newer developments beyond an article, background on a person/place/company not explained in the article, or when RSS tools return no relevant Economist material.
 - Before using web search, try `economist_recent`, `economist_search`, or `economist_article` unless the caller has clearly asked for sources beyond *The Economist*.
+- If the caller explicitly asks to search the web, use outside web context, or find information outside *The Economist*, call `web_search` before answering.
+- Treat "web search", "outside web context", "outside The Economist", and "use the web search tool" as explicit external-search requests; do not name an outside source until `web_search` has returned results.
 - When web search is used, state that the added context comes from outside *The Economist*.
+- When the caller asks for more detail about a listed article, call `economist_article` immediately instead of asking whether to retrieve the full text.
 - Say when the feed has no matching article or when only an excerpt is available.
 - Keep spoken answers compact, then offer to go deeper.
 
@@ -164,6 +167,7 @@ ELEVENLABS_API_KEY=
 ELEVENLABS_AGENT_ID=
 ELEVENLABS_API_BASE=https://api.elevenlabs.io
 ELEVENLABS_TELEPHONY_AUDIO_FORMAT=ulaw_8000
+ELEVENLABS_VOICE_ID=onwK4e9ZLuTAKqWW03F9
 ELEVENLABS_POST_CALL_WEBHOOK_ID=
 ELEVENLABS_POST_CALL_TOKEN=
 ELEVENLABS_WEBHOOK_SECRET=
@@ -179,13 +183,16 @@ ALLOWED_CALLER_NUMBERS=
 ECONOMIST_RSS_URL=
 ECONOMIST_RSS_BEARER_TOKEN=
 ECONOMIST_RSS_CACHE_SECONDS=900
-ECONOMIST_RSS_TIMEOUT_MS=12000
+ECONOMIST_RSS_TIMEOUT_MS=25000
 BARTLEBY_BOOTSTRAP_ARTICLE_LIMIT=200
 BARTLEBY_BOOTSTRAP_MAX_CHARS=60000
 
 WEB_SEARCH_PROVIDER=auto
 TAVILY_API_KEY=
+TAVILY_SEARCH_DEPTH=basic
 ```
+
+The default `ELEVENLABS_VOICE_ID` is ElevenLabs' Daniel voice, a British male broadcaster-style voice. Override it with another available ElevenLabs voice ID if desired.
 
 Do not commit `.env`, provider secrets, real phone numbers, subscriber RSS URLs, API keys, cookies, browser profiles, or exported configs that contain live operational identifiers.
 

@@ -581,6 +581,8 @@ async function getCall(env, callSid) {
 
 async function webSearch(env, { query = "", max_results: maxResults = 3 } = {}) {
   const normalizedQuery = normalize(query);
+  const boundedMaxResults = clampInteger(maxResults, 1, 8, 3);
+  const providerErrors = [];
   if (!normalizedQuery) {
     return {
       ok: false,
@@ -588,6 +590,26 @@ async function webSearch(env, { query = "", max_results: maxResults = 3 } = {}) 
       answer_text: "A web search query is required.",
       results: [],
     };
+  }
+
+  if (env.WEBSEARCH && typeof env.WEBSEARCH.search === "function") {
+    try {
+      const body = await cloudflareWebSearch(env.WEBSEARCH, normalizedQuery, boundedMaxResults);
+      const results = normalizeSearchResults(body, "cloudflare_websearch").slice(0, boundedMaxResults);
+      if (results.length) {
+        return {
+          ok: true,
+          status: "ok",
+          provider: "cloudflare_websearch",
+          query: normalizedQuery,
+          answer_text: `I found ${results.length} outside web result${results.length === 1 ? "" : "s"}.`,
+          results,
+        };
+      }
+      providerErrors.push("cloudflare_websearch returned no results");
+    } catch (error) {
+      providerErrors.push(`cloudflare_websearch failed: ${error?.message || String(error)}`);
+    }
   }
 
   if (env.TAVILY_API_KEY) {
@@ -605,62 +627,185 @@ async function webSearch(env, { query = "", max_results: maxResults = 3 } = {}) 
       });
       const body = await response.json().catch(() => ({}));
       if (response.ok) {
-        const results = (body.results || []).map((item) => ({
-          title: item.title || "",
-          url: item.url || "",
-          snippet: item.content || item.snippet || "",
-          source: "tavily",
-        }));
-        return {
-          ok: true,
-          status: "ok",
-          provider: "tavily",
-          query: normalizedQuery,
-          answer_text:
-            body.answer ||
-            (results.length ? `I found ${results.length} outside web result${results.length === 1 ? "" : "s"}.` : "I did not find outside web results."),
-          results,
-        };
+        const results = normalizeSearchResults(body, "tavily").slice(0, boundedMaxResults);
+        if (results.length) {
+          return {
+            ok: true,
+            status: "ok",
+            provider: "tavily",
+            query: normalizedQuery,
+            answer_text: body.answer || `I found ${results.length} outside web result${results.length === 1 ? "" : "s"}.`,
+            results,
+          };
+        }
+        providerErrors.push("tavily returned no results");
+      } else {
+        providerErrors.push(`tavily failed with HTTP ${response.status}`);
       }
-    } catch {
-      // Fall back to DuckDuckGo below.
+    } catch (error) {
+      providerErrors.push(`tavily failed: ${error?.message || String(error)}`);
     }
   }
 
+  const instantResults = await duckDuckGoInstantSearch(normalizedQuery, boundedMaxResults).catch((error) => {
+    providerErrors.push(`duckduckgo instant failed: ${error?.message || String(error)}`);
+    return [];
+  });
+  if (instantResults.length) {
+    return {
+      ok: true,
+      status: "ok",
+      provider: "duckduckgo",
+      query: normalizedQuery,
+      answer_text: `I found ${instantResults.length} outside web result${instantResults.length === 1 ? "" : "s"}.`,
+      results: instantResults,
+    };
+  }
+
+  const htmlResults = await duckDuckGoHtmlSearch(normalizedQuery, boundedMaxResults).catch((error) => {
+    providerErrors.push(`duckduckgo html failed: ${error?.message || String(error)}`);
+    return [];
+  });
+  if (htmlResults.length) {
+    return {
+      ok: true,
+      status: "ok",
+      provider: "duckduckgo_html",
+      query: normalizedQuery,
+      answer_text: `I found ${htmlResults.length} outside web result${htmlResults.length === 1 ? "" : "s"}.`,
+      results: htmlResults,
+    };
+  }
+
+  const bingResults = await bingHtmlSearch(normalizedQuery, boundedMaxResults).catch((error) => {
+    providerErrors.push(`bing html failed: ${error?.message || String(error)}`);
+    return [];
+  });
+  if (bingResults.length) {
+    return {
+      ok: true,
+      status: "ok",
+      provider: "bing_html",
+      query: normalizedQuery,
+      answer_text: `I found ${bingResults.length} outside web result${bingResults.length === 1 ? "" : "s"}.`,
+      results: bingResults,
+    };
+  }
+
+  return {
+    ok: false,
+    status: "no_web_results",
+    provider: "none",
+    query: normalizedQuery,
+    answer_text: "I could not find useful outside web results.",
+    provider_errors: providerErrors.slice(0, 5),
+    results: [],
+  };
+}
+
+async function cloudflareWebSearch(binding, query, maxResults) {
+  try {
+    return await binding.search(query, { limit: maxResults });
+  } catch (firstError) {
+    try {
+      return await binding.search({ query, limit: maxResults });
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+async function duckDuckGoInstantSearch(query, maxResults) {
   const url = new URL("https://api.duckduckgo.com/");
-  url.searchParams.set("q", normalizedQuery);
+  url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
   url.searchParams.set("no_html", "1");
   url.searchParams.set("no_redirect", "1");
   const response = await fetch(url.toString(), {
     headers: { "user-agent": "bartleby-web-search/0.1" },
   });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const body = await response.json().catch(() => ({}));
   const related = flattenDuckDuckGoTopics(body.RelatedTopics || []);
-  const results = [
+  return [
     body.AbstractText
       ? {
-          title: body.Heading || normalizedQuery,
+          title: cleanSearchText(body.Heading || query),
           url: body.AbstractURL || "",
-          snippet: body.AbstractText,
+          snippet: cleanSearchText(body.AbstractText),
           source: body.AbstractSource || "duckduckgo",
         }
       : null,
     ...related,
   ]
-    .filter(Boolean)
-    .slice(0, clampInteger(maxResults, 1, 8, 3));
+    .filter((item) => item?.title || item?.snippet)
+    .slice(0, maxResults);
+}
 
-  return {
-    ok: true,
-    status: "ok",
-    provider: "duckduckgo",
-    query: normalizedQuery,
-    answer_text: results.length
-      ? `I found ${results.length} outside web result${results.length === 1 ? "" : "s"}.`
-      : "I did not find useful outside web results.",
-    results,
-  };
+async function duckDuckGoHtmlSearch(query, maxResults) {
+  const url = new URL("https://html.duckduckgo.com/html/");
+  url.searchParams.set("q", query);
+  const response = await fetch(url.toString(), {
+    headers: { "user-agent": "bartleby-web-search/0.1" },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const html = await response.text();
+  const linkMatches = [
+    ...html.matchAll(/<a\b[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi),
+  ];
+  const snippets = [
+    ...html.matchAll(/<a\b[^>]*class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi),
+  ].map((match) => cleanSearchText(match[1]));
+
+  return linkMatches
+    .map((match, index) => ({
+      title: cleanSearchText(match[2]),
+      url: duckDuckGoResultUrl(match[1]),
+      snippet: snippets[index] || "",
+      source: "duckduckgo_html",
+    }))
+    .filter((item) => item.title && item.url)
+    .slice(0, maxResults);
+}
+
+async function bingHtmlSearch(query, maxResults) {
+  const url = new URL("https://www.bing.com/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("count", String(maxResults));
+  const response = await fetch(url.toString(), {
+    headers: { "user-agent": "Mozilla/5.0 bartleby-web-search/0.1" },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const html = await response.text();
+  const blocks = [...html.matchAll(/<li\b[^>]*class=["'][^"']*b_algo[^"']*["'][\s\S]*?<\/li>/gi)].map(
+    (match) => match[0]
+  );
+
+  return blocks
+    .map((block) => {
+      const link = block.match(/<h2[^>]*>\s*<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+      const snippet = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+      return {
+        title: cleanSearchText(link?.[2] || ""),
+        url: bingResultUrl(link?.[1] || ""),
+        snippet: cleanSearchText(snippet?.[1] || ""),
+        source: "bing_html",
+      };
+    })
+    .filter((item) => item.title && item.url)
+    .slice(0, maxResults);
+}
+
+function normalizeSearchResults(body, source) {
+  const rawItems = body?.items || body?.results || body?.webPages?.value || [];
+  return rawItems
+    .map((item) => ({
+      title: cleanSearchText(item.title || item.name || item.heading || ""),
+      url: item.url || item.link || item.href || "",
+      snippet: cleanSearchText(item.snippet || item.content || item.description || item.text || ""),
+      source,
+    }))
+    .filter((item) => item.title || item.snippet);
 }
 
 function flattenDuckDuckGoTopics(topics) {
@@ -670,14 +815,68 @@ function flattenDuckDuckGoTopics(topics) {
       results.push(...flattenDuckDuckGoTopics(topic.Topics));
     } else if (topic.Text || topic.FirstURL) {
       results.push({
-        title: topic.Text?.split(" - ")[0] || topic.FirstURL || "",
+        title: cleanSearchText(topic.Text?.split(" - ")[0] || topic.FirstURL || ""),
         url: topic.FirstURL || "",
-        snippet: topic.Text || "",
+        snippet: cleanSearchText(topic.Text || ""),
         source: "duckduckgo",
       });
     }
   }
   return results;
+}
+
+function duckDuckGoResultUrl(value) {
+  const text = decodeHtmlEntities(String(value || ""));
+  try {
+    const absolute = text.startsWith("//") ? `https:${text}` : text;
+    const url = new URL(absolute);
+    return url.searchParams.get("uddg") || absolute;
+  } catch {
+    return text;
+  }
+}
+
+function bingResultUrl(value) {
+  const text = decodeHtmlEntities(String(value || ""));
+  try {
+    const url = new URL(text);
+    const encoded = url.searchParams.get("u");
+    if (encoded?.startsWith("a1")) {
+      return base64UrlDecode(encoded.slice(2));
+    }
+    return text;
+  } catch {
+    return text;
+  }
+}
+
+function base64UrlDecode(value) {
+  const base64 = String(value || "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(Math.ceil(String(value || "").length / 4) * 4, "=");
+  const binary = atob(base64);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function cleanSearchText(value) {
+  return decodeHtmlEntities(String(value || "").replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)));
 }
 
 function parseCallRow(row) {

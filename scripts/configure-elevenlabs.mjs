@@ -3,6 +3,7 @@ const apiKey = process.env.ELEVENLABS_API_KEY;
 const publicBaseUrl = stripTrailingSlash(process.env.BARTLEBY_PUBLIC_BASE_URL || "");
 const toolToken = process.env.BARTLEBY_TOOL_TOKEN;
 const telephonyFormat = process.env.ELEVENLABS_TELEPHONY_AUDIO_FORMAT || "ulaw_8000";
+const voiceId = process.env.ELEVENLABS_VOICE_ID || "onwK4e9ZLuTAKqWW03F9";
 const agentName = process.env.ELEVENLABS_AGENT_NAME || "Bartleby Economist Bot";
 const postCallWebhookId = process.env.ELEVENLABS_POST_CALL_WEBHOOK_ID || "";
 const firstMessage =
@@ -54,6 +55,7 @@ conversationConfig.asr = {
 };
 conversationConfig.tts = {
   ...(conversationConfig.tts || {}),
+  voice_id: voiceId,
   agent_output_audio_format: telephonyFormat,
 };
 
@@ -72,6 +74,7 @@ console.log(
     {
       ok: true,
       agent_id: updated.agent_id || agentId,
+      voice_id: voiceId,
       tool_ids: tools.map((tool) => ({
         id: tool.id,
         name: tool.tool_config?.name,
@@ -119,6 +122,7 @@ function toolConfigs() {
       description: "List sections found in The Economist RSS feed from RSS category tags.",
       url: `${publicBaseUrl}/tools/economist/sections`,
       required: [],
+      responseTimeoutSecs: 30,
       requestProperties: {
         refresh: booleanProperty("Whether to force-refresh the Economist RSS feed cache."),
       },
@@ -139,6 +143,7 @@ function toolConfigs() {
         "Return recent Economist RSS articles. Use this first for latest-news questions and section browsing.",
       url: `${publicBaseUrl}/tools/economist/recent`,
       required: [],
+      responseTimeoutSecs: 30,
       requestProperties: articleListRequestProperties(),
       responseDescription: "Recent Economist RSS articles.",
       responseProperties: articleListResponseProperties(),
@@ -149,6 +154,7 @@ function toolConfigs() {
         "Search recent Economist RSS articles by keyword, section/category, and optional date range. Use this before web_search for Economist-grounded questions.",
       url: `${publicBaseUrl}/tools/economist/search`,
       required: [],
+      responseTimeoutSecs: 30,
       requestProperties: {
         ...articleListRequestProperties(),
         query: stringProperty("Keyword or phrase to search for in Economist RSS entries."),
@@ -162,6 +168,7 @@ function toolConfigs() {
         "Retrieve the longest available RSS text for a specific Economist article by entry id or URL.",
       url: `${publicBaseUrl}/tools/economist/article`,
       required: [],
+      responseTimeoutSecs: 30,
       requestProperties: {
         entry_id: stringProperty("Entry id returned by economist_recent or economist_search."),
         article_url: stringProperty("Article URL returned by economist_recent or economist_search."),
@@ -186,7 +193,7 @@ function toolConfigs() {
     webhookTool({
       name: "web_search",
       description:
-        "Narrow outside-web fallback. Use only when Andrew explicitly asks for information outside The Economist, newer developments beyond an article, or when Economist tools return no relevant material.",
+        "Narrow outside-web fallback. Must be called before answering whenever Andrew explicitly asks you to search the web, use outside web context, use the web_search tool, or find information outside The Economist.",
       url: `${publicBaseUrl}/tools/web-search`,
       required: ["query"],
       responseTimeoutSecs: 20,
@@ -412,6 +419,7 @@ Primary source policy:
 - Keep Business separate from Finance and Economics. Use section "Business" for the Business section and section "Finance and Economics" for the Finance and Economics section.
 - Use economist_search for keyword, topic, person, company, country, and date questions, including within a section/category.
 - Use economist_article before giving detail on a specific article or answering whether full article text is available.
+- If Andrew asks for more detail, more information, a deeper explanation, or "tell me more" about a specific article or listed item, call economist_article immediately for that article. Do not ask whether he wants the full text first.
 - If Andrew asks you to use, test, check, or verify tools, make the requested Economist tool calls even when startup context already has enough information.
 - Treat RSS category tags as Economist sections.
 - Mention article title and section when grounding an answer.
@@ -430,6 +438,8 @@ Injected startup context:
 Outside web search policy:
 - web_search is a narrow fallback, not the default.
 - Use web_search only when Andrew explicitly asks for outside-Economist information, newer developments beyond an Economist article, background not explained by the article, or when Economist tools return no relevant material.
+- Treat phrases like "search the web", "web search", "outside web context", "outside The Economist", "use web_search", and "use the web search tool" as explicit external-search requests.
+- If Andrew explicitly asks for an external-search request, call web_search before answering. Do not answer these requests from memory alone, and do not name an outside source or source title until web_search has returned results.
 - When using web_search, say the added context comes from outside The Economist.
 
 Voice style:
