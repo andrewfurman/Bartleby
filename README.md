@@ -66,6 +66,8 @@ The ElevenLabs agent should have a small, explicit tool set:
 
 Tool responses should include stable entry IDs, title, URL, author when available, published date, section/category list, excerpt, and a short `answer_text` field that is safe for the voice agent to read aloud.
 
+The private RSS feed is now a lightweight article index for most stories. `economist_article` uses that index to find the item, then calls the feed server's authenticated `/article.txt` companion endpoint for cached plain text when RSS only has a preview.
+
 The agent should never use `web_search` merely because a question is current, broad, or complicated. It should first check the Economist RSS tools, answer from those articles when possible, and only then use search if the user requested outside information or the RSS result establishes a real gap.
 
 ## Call Logging
@@ -150,7 +152,7 @@ Bartleby should answer like an informed, concise reading companion:
 - If the caller explicitly asks to search the web, use outside web context, or find information outside *The Economist*, call `web_search` before answering.
 - Treat "web search", "outside web context", "outside The Economist", and "use the web search tool" as explicit external-search requests; do not name an outside source until `web_search` has returned results.
 - When web search is used, state that the added context comes from outside *The Economist*.
-- When the caller asks for more detail about a listed article, call `economist_article` immediately instead of asking whether to retrieve the full text.
+- When the caller asks for more detail about a listed article, call `economist_article` immediately instead of asking whether to retrieve the full text. Do this before saying full text is unavailable.
 - Say when the feed has no matching article or when only an excerpt is available.
 - Keep spoken answers compact, then offer to go deeper.
 

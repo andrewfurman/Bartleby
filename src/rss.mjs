@@ -6,6 +6,7 @@ const DEFAULT_EXCERPT_CHARS = 420;
 const DEFAULT_MAX_TEXT_CHARS = 60_000;
 const DEFAULT_BOOTSTRAP_LIMIT = 200;
 const DEFAULT_BOOTSTRAP_MAX_CHARS = 60_000;
+const FULL_TEXT_MIN_CHARS = 700;
 
 let feedCache = null;
 
@@ -192,9 +193,16 @@ export async function economistArticle(
   }
 
   const boundedMax = clampInteger(maxTextChars, 2_000, 120_000, DEFAULT_MAX_TEXT_CHARS);
-  const text = normalizeArticleText(item.full_text || item.summary || "");
+  const rssText = normalizeArticleText(item.full_text || item.summary || "");
+  const articleTextResult = await fetchArticleText(env, item);
+  const articleText = articleTextResult.ok ? articleTextResult.text : "";
+  const text = articleText.length > rssText.length ? articleText : rssText;
+  const contentSource = articleText.length > rssText.length ? "article_txt" : item.content_source;
   const truncated = truncate(text, boundedMax);
-  const fullArticleAvailable = text.length >= 700 && item.content_source !== "feed_summary";
+  const fullArticleAvailable =
+    text.length >= FULL_TEXT_MIN_CHARS && (contentSource !== "feed_summary" || isBriefEntry(item));
+  const retrievalSource =
+    contentSource === "article_txt" ? "The Economist article text endpoint" : "The Economist RSS feed";
 
   return {
     ok: true,
@@ -204,17 +212,20 @@ export async function economistArticle(
     entry: compactEntry(item, { excerptChars: 700 }),
     entry_id: item.id,
     full_article_available: fullArticleAvailable,
-    content_source: item.content_source,
+    content_source: contentSource,
+    article_text_status: articleTextResult.status,
     full_text_chars: text.length,
     returned_text_chars: truncated.value.length,
     full_text_truncated: truncated.truncated,
     access_note:
       fullArticleAvailable || text.length >= 700
         ? ""
-        : "The RSS feed appears to provide only an excerpt for this article.",
+        : articleTextResult.status === "article_text_not_found"
+          ? "The RSS feed and article text endpoint only provide an excerpt for this article."
+          : "The RSS feed appears to provide only an excerpt for this article.",
     full_text: truncated.value,
     answer_text: fullArticleAvailable
-      ? `Retrieved "${item.title}" from The Economist RSS feed.`
+      ? `Retrieved "${item.title}" from ${retrievalSource}.`
       : `Retrieved "${item.title}", but the RSS feed may only include an excerpt.`,
   };
 }
@@ -332,6 +343,7 @@ function rssItem(block, feed) {
   const summaryHtml = tagText(block, "description") || tagText(block, "summary");
   const fullText = normalizeArticleText(htmlToText(contentHtml || summaryHtml));
   const summary = normalizeArticleText(htmlToText(summaryHtml || contentHtml));
+  const fullDescriptionText = isFullBriefDescription({ title, url, categories, text: fullText });
   const publishedAt = normalizeDate(
     tagText(block, "pubDate") || tagText(block, "published") || tagText(block, "dc:date")
   );
@@ -348,10 +360,10 @@ function rssItem(block, feed) {
     section: categories[0] || "",
     published_at: publishedAt,
     updated_at: updatedAt,
-    content_source: contentHtml ? "feed_content_encoded" : "feed_summary",
+    content_source: contentHtml ? "feed_content_encoded" : fullDescriptionText ? "feed_description_full_text" : "feed_summary",
     full_text: fullText,
     summary,
-    full_text_available: contentHtml ? fullText.length >= 700 : false,
+    full_text_available: contentHtml ? fullText.length >= FULL_TEXT_MIN_CHARS : fullDescriptionText,
     reading_time: readingTime(fullText),
   };
 }
@@ -365,6 +377,7 @@ function atomItem(block, feed) {
   const summaryHtml = tagText(block, "summary");
   const fullText = normalizeArticleText(htmlToText(contentHtml || summaryHtml));
   const summary = normalizeArticleText(htmlToText(summaryHtml || contentHtml));
+  const fullDescriptionText = isFullBriefDescription({ title, url, categories, text: fullText });
   const publishedAt = normalizeDate(tagText(block, "published"));
   const updatedAt = normalizeDate(tagText(block, "updated"));
 
@@ -379,10 +392,10 @@ function atomItem(block, feed) {
     section: categories[0] || "",
     published_at: publishedAt || updatedAt,
     updated_at: updatedAt,
-    content_source: contentHtml ? "feed_content" : "feed_summary",
+    content_source: contentHtml ? "feed_content" : fullDescriptionText ? "feed_description_full_text" : "feed_summary",
     full_text: fullText,
     summary,
-    full_text_available: contentHtml ? fullText.length >= 700 : false,
+    full_text_available: contentHtml ? fullText.length >= FULL_TEXT_MIN_CHARS : fullDescriptionText,
     reading_time: readingTime(fullText),
   };
 }
@@ -509,6 +522,77 @@ function isWorldInBrief(item) {
     /^(the )?world in brief\b/i.test(item.title) ||
     /\/the-world-in-brief\//i.test(item.url)
   );
+}
+
+function isBriefEntry(item) {
+  return isUsInBrief(item) || isWorldInBrief(item);
+}
+
+function isFullBriefDescription({ title = "", url = "", categories = [], text = "" }) {
+  if (normalizeArticleText(text).length < FULL_TEXT_MIN_CHARS) return false;
+  return isBriefEntry({ title, url, categories });
+}
+
+async function fetchArticleText(env, item) {
+  if (!item?.url) {
+    return { ok: false, status: "article_text_no_url", text: "" };
+  }
+
+  const config = economistFeedConfig(env);
+  const url = articleTextEndpointUrl(config, item);
+  if (!url) {
+    return { ok: false, status: "article_text_endpoint_not_configured", text: "" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        accept: "text/plain;q=1.0, text/*;q=0.9",
+        "user-agent": "bartleby-economist-rss/0.1",
+        ...(config.bearerToken ? { authorization: `Bearer ${config.bearerToken}` } : {}),
+      },
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status === 404 ? "article_text_not_found" : "article_text_request_failed",
+        upstream_status: response.status,
+        text: "",
+      };
+    }
+
+    const text = normalizeArticleText(body);
+    return text
+      ? { ok: true, status: "ok", text }
+      : { ok: false, status: "article_text_empty", text: "" };
+  } catch (error) {
+    return {
+      ok: false,
+      status: error?.name === "AbortError" ? "article_text_timeout" : "article_text_request_failed",
+      message: error?.message || String(error),
+      text: "",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function articleTextEndpointUrl(config, item) {
+  try {
+    const feedUrl = new URL(config.url);
+    const url = new URL("/article.txt", feedUrl.origin);
+    for (const token of feedUrl.searchParams.getAll("token")) {
+      url.searchParams.append("token", token);
+    }
+    url.searchParams.set("url", item.url);
+    return url.toString();
+  } catch {
+    return "";
+  }
 }
 
 function bootstrapContextText(result, recentArticles, usInBrief, worldInBrief) {

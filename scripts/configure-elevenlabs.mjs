@@ -181,9 +181,10 @@ function toolConfigs() {
         status: stringProperty("Status code."),
         answer_text: stringProperty("Compact spoken summary."),
         access_note: stringProperty("Note when the RSS feed only provides an excerpt."),
-        full_article_available: booleanProperty("Whether full article text appears available from the RSS entry."),
-        content_source: stringProperty("RSS source for the returned text, such as feed_content_encoded or feed_summary."),
-        full_text_chars: integerProperty("Total available article text characters in the RSS entry."),
+        full_article_available: booleanProperty("Whether full article text appears available."),
+        content_source: stringProperty("Source for the returned text, such as article_txt, feed_content_encoded, feed_description_full_text, or feed_summary."),
+        article_text_status: stringProperty("Status from the private /article.txt companion endpoint, when checked."),
+        full_text_chars: integerProperty("Total available article text characters from the selected source."),
         returned_text_chars: integerProperty("Number of article text characters returned to the agent."),
         full_text_truncated: booleanProperty("Whether the returned full_text was truncated by max_text_chars."),
         full_text: stringProperty("Article text or excerpt from RSS."),
@@ -429,7 +430,8 @@ Startup context:
 - At the start of every phone call, the webhook injects a startup context before Andrew speaks.
 - This context contains the latest U.S. in Brief entry when present, the latest World in Brief entry when present, and an index of up to 200 recent Economist RSS articles.
 - Use this context before making a tool call or saying that a section/article is missing.
-- Startup context excerpts are short previews. If a startup entry says "Full text: available in RSS", do not describe it as excerpt-only.
+- The current private RSS feed is an index plus previews for most articles; economist_article can retrieve cached full text through the private article text endpoint.
+- Startup context excerpts are short previews. If Andrew asks for more, use economist_article before saying full text is unavailable.
 - If Andrew asks for World in Brief and the startup context says it was not found, say that the configured RSS feed did not include a World in Brief entry in the preloaded recent article index. Do not imply you checked only five articles.
 
 Injected startup context:

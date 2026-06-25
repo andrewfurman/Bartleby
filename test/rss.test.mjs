@@ -71,6 +71,36 @@ const publicEconomistStyleFeed = `<?xml version="1.0"?>
   </channel>
 </rss>`;
 
+const summaryOnlyPrivateFeed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>The Economist private article feed</title>
+    <item>
+      <title>World in Brief: Huge earthquakes hit Venezuela; Apple makes a drastic price hike</title>
+      <link>https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9</link>
+      <guid isPermaLink="false">world-brief-guid</guid>
+      <pubDate>Thu, 25 Jun 2026 00:00:00 GMT</pubDate>
+      <category>The World in Brief</category>
+      <description>The world in brief preview only...</description>
+    </item>
+  </channel>
+</rss>`;
+
+const fullBriefDescriptionFeed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>The Economist private article feed</title>
+    <item>
+      <title>World in Brief: Huge earthquakes hit Venezuela; Apple makes a drastic price hike</title>
+      <link>https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9</link>
+      <guid isPermaLink="false">world-brief-guid</guid>
+      <pubDate>Thu, 25 Jun 2026 00:00:00 GMT</pubDate>
+      <category>The World in Brief</category>
+      <description>${"Full World in Brief description text. ".repeat(40)}</description>
+    </item>
+  </channel>
+</rss>`;
+
 describe("Economist RSS parsing", () => {
   it("preserves RSS category tags as sections", () => {
     const parsed = parseFeed(sampleFeed, {
@@ -103,6 +133,20 @@ describe("Economist RSS parsing", () => {
     assert.equal(parsed.items[1].section, "The World in Brief");
     assert.deepEqual(parsed.items[2].categories, ["Leaders"]);
     assert.equal(parsed.items[2].section, "Leaders");
+  });
+
+  it("treats long brief descriptions as full text", () => {
+    const parsed = parseFeed(fullBriefDescriptionFeed, {
+      id: "economist",
+      title: "The Economist",
+      url: "https://example.com/feed.xml?token=secret",
+      private: true,
+    });
+
+    assert.equal(parsed.items.length, 1);
+    assert.equal(parsed.items[0].content_source, "feed_description_full_text");
+    assert.equal(parsed.items[0].full_text_available, true);
+    assert.equal(parsed.items[0].reading_time > 0, true);
   });
 
   it("builds startup context with briefs and a bounded recent index", async () => {
@@ -221,10 +265,36 @@ describe("Economist RSS parsing", () => {
     assert.equal(article.ok, true);
     assert.match(article.full_text, /Full text about America/);
   });
+
+  it("uses the private article.txt endpoint when RSS only has a preview", async () => {
+    const fullText = "The world in brief\n\n" + "Full cached World in Brief text from the article endpoint. ".repeat(30);
+    const articleUrl = "https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9";
+    const env = feedEnv(summaryOnlyPrivateFeed, {
+      articleTextByUrl: {
+        [articleUrl]: fullText,
+      },
+    });
+    const article = await economistArticle(env, {
+      article_url: articleUrl,
+      refresh: true,
+    });
+    const articleTextUrl = new URL(globalThis.__lastArticleTextFetchUrl);
+
+    assert.equal(article.ok, true);
+    assert.equal(article.content_source, "article_txt");
+    assert.equal(article.article_text_status, "ok");
+    assert.equal(article.full_article_available, true);
+    assert.match(article.full_text, /Full cached World in Brief text/);
+    assert.equal(articleTextUrl.pathname, "/article.txt");
+    assert.equal(articleTextUrl.searchParams.get("token"), "secret");
+    assert.equal(articleTextUrl.searchParams.get("url"), articleUrl);
+  });
 });
 
-function feedEnv(xml) {
+function feedEnv(xml, { articleTextByUrl = {} } = {}) {
   globalThis.__testFeedXml = xml;
+  globalThis.__articleTextByUrl = articleTextByUrl;
+  globalThis.__lastArticleTextFetchUrl = "";
   return {
     ECONOMIST_RSS_URL: "https://example.com/feed.xml?token=secret",
     ECONOMIST_RSS_CACHE_SECONDS: "900",
@@ -236,6 +306,18 @@ function feedEnv(xml) {
 globalThis.fetch = async (_url, options = {}) => {
   globalThis.__lastFetchUrl = String(_url);
   globalThis.__lastFetchOptions = options;
+  const url = new URL(String(_url));
+  if (url.pathname === "/article.txt") {
+    globalThis.__lastArticleTextFetchUrl = String(_url);
+    const articleText = globalThis.__articleTextByUrl?.[url.searchParams.get("url") || ""];
+    if (!articleText) {
+      return new Response("Article text not found", { status: 404 });
+    }
+    return new Response(articleText, {
+      status: 200,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
   return new Response(globalThis.__testFeedXml || sampleFeed, {
     status: 200,
     headers: { "content-type": "application/rss+xml" },
