@@ -327,7 +327,7 @@ function rssItem(block, feed) {
   const title = tagText(block, "title");
   const url = normalize(tagText(block, "link") || tagText(block, "guid"));
   const explicitCategories = tagTexts(block, "category").filter(Boolean);
-  const categories = explicitCategories.length ? explicitCategories : inferredEconomistCategories({ title, url });
+  const categories = itemCategories(explicitCategories, { title, url });
   const contentHtml = tagText(block, "content:encoded") || tagText(block, "encoded");
   const summaryHtml = tagText(block, "description") || tagText(block, "summary");
   const fullText = normalizeArticleText(htmlToText(contentHtml || summaryHtml));
@@ -360,7 +360,7 @@ function atomItem(block, feed) {
   const title = tagText(block, "title");
   const url = atomLink(block) || tagText(block, "id");
   const explicitCategories = atomCategories(block);
-  const categories = explicitCategories.length ? explicitCategories : inferredEconomistCategories({ title, url });
+  const categories = itemCategories(explicitCategories, { title, url });
   const contentHtml = tagText(block, "content");
   const summaryHtml = tagText(block, "summary");
   const fullText = normalizeArticleText(htmlToText(contentHtml || summaryHtml));
@@ -497,7 +497,7 @@ function latestBriefEntry(items, kind) {
 
 function isUsInBrief(item) {
   return (
-    item.categories.includes("United States") ||
+    item.categories.includes("The US in Brief") ||
     item.categories.includes("The U.S. in Brief") ||
     /^(the )?(us|u\.s\.|united states) in brief\b/i.test(item.title)
   );
@@ -607,6 +607,12 @@ function atomCategories(block) {
   return categories;
 }
 
+function itemCategories(explicitCategories, { title, url }) {
+  const briefSections = inferredBriefSections(title);
+  if (!explicitCategories.length) return inferredEconomistCategories({ title, url });
+  return uniqueStrings([...briefSections, ...explicitCategories]);
+}
+
 function inferredEconomistCategories({ title, url }) {
   const categories = inferredBriefSections(title);
 
@@ -618,7 +624,9 @@ function inferredEconomistCategories({ title, url }) {
 
 function inferredBriefSections(title) {
   const normalizedTitle = normalize(title).toLowerCase();
-  if (/^(the )?(us|u\.s\.|united states) in brief\b/.test(normalizedTitle)) return ["In Brief", "United States"];
+  if (/^(the )?(us|u\.s\.|united states) in brief\b/.test(normalizedTitle)) {
+    return ["The US in Brief", "In Brief", "United States"];
+  }
   if (/^(the )?world in brief\b/.test(normalizedTitle)) return ["The World in Brief"];
   return [];
 }
@@ -791,12 +799,12 @@ function expandSectionAlias(value) {
     america: ["United States"],
     "the united states": ["United States"],
     "united states": ["United States"],
-    "us in brief": ["United States"],
-    "u s in brief": ["United States"],
-    "the us in brief": ["United States"],
-    "the u s in brief": ["United States"],
-    "united states in brief": ["United States"],
-    "the united states in brief": ["United States"],
+    "us in brief": ["The US in Brief"],
+    "u s in brief": ["The US in Brief"],
+    "the us in brief": ["The US in Brief"],
+    "the u s in brief": ["The US in Brief"],
+    "united states in brief": ["The US in Brief"],
+    "the united states in brief": ["The US in Brief"],
     "world in brief": ["The World in Brief"],
     "the world in brief": ["The World in Brief"],
     "business and finance": ["Business", "Finance and Economics"],
@@ -822,8 +830,12 @@ function expandSectionAlias(value) {
 function itemMatchesSection(item, requestedSection) {
   const requested = sectionComparable(requestedSection);
   const labels = new Set([item.section, ...item.categories]);
-  if (isUsInBrief(item)) labels.add("United States");
+  if (isUsInBrief(item)) labels.add("The US in Brief");
   if (isWorldInBrief(item)) labels.add("The World in Brief");
+  if (requested === "us in brief" || requested === "united states in brief") return isUsInBrief(item);
+  if (requested === "united states") {
+    return !isUsInBrief(item) && [...labels].some((label) => sectionComparable(label) === "united states");
+  }
   for (const label of labels) {
     const comparable = sectionComparable(label);
     if (!comparable) continue;
@@ -847,11 +859,21 @@ function categoryFilterUrl(value, categories) {
     const url = new URL(value);
     url.searchParams.delete("category");
     url.searchParams.delete("categories");
-    for (const category of categories) url.searchParams.append("category", category);
+    for (const category of rssCategoryFilters(categories)) url.searchParams.append("category", category);
     return url.toString();
   } catch {
     return value;
   }
+}
+
+function rssCategoryFilters(categories) {
+  const filters = [];
+  for (const category of categories) {
+    const comparable = sectionComparable(category);
+    const rssCategory = comparable === "us in brief" || comparable === "united states in brief" ? "In Brief" : category;
+    if (!filters.includes(rssCategory)) filters.push(rssCategory);
+  }
+  return filters;
 }
 
 function redactedUrl(value, isPrivate) {
@@ -898,4 +920,12 @@ function toBoolean(value, fallback) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function uniqueStrings(values) {
+  const unique = [];
+  for (const value of values) {
+    if (value && !unique.includes(value)) unique.push(value);
+  }
+  return unique;
 }

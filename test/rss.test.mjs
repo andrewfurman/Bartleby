@@ -10,10 +10,19 @@ const sampleFeed = `<?xml version="1.0"?>
       <title>America tests a new policy</title>
       <link>https://www.economist.com/united-states/2026/06/24/example</link>
       <pubDate>Wed, 24 Jun 2026 12:00:00 GMT</pubDate>
-      <category>The United States</category>
+      <category>United States</category>
       <category>Politics</category>
       <description><![CDATA[An article excerpt about policy.]]></description>
       <content:encoded><![CDATA[<p>Full text about America and policy.</p><p>More context from The Economist.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>The US in Brief: A big night in New York</title>
+      <link>https://www.economist.com/in-brief/2026/06/24/the-us-in-brief-a-big-night-in-new-york</link>
+      <pubDate>Wed, 24 Jun 2026 11:21:54 GMT</pubDate>
+      <category>In Brief</category>
+      <category>United States</category>
+      <description><![CDATA[Our daily political update.]]></description>
+      <content:encoded><![CDATA[<p>A full daily political update from The Economist.</p><p>More brief context.</p>]]></content:encoded>
     </item>
     <item>
       <title>Markets in brief</title>
@@ -64,9 +73,11 @@ describe("Economist RSS parsing", () => {
       private: true,
     });
 
-    assert.equal(parsed.items.length, 2);
-    assert.deepEqual(parsed.items[0].categories, ["The United States", "Politics"]);
-    assert.equal(parsed.items[0].section, "The United States");
+    assert.equal(parsed.items.length, 3);
+    assert.deepEqual(parsed.items[0].categories, ["United States", "Politics"]);
+    assert.equal(parsed.items[0].section, "United States");
+    assert.deepEqual(parsed.items[1].categories, ["The US in Brief", "In Brief", "United States"]);
+    assert.equal(parsed.items[1].section, "The US in Brief");
     assert.equal(parsed.feed.feed_url, "https://example.com/feed.xml?token=redacted");
   });
 
@@ -79,8 +90,8 @@ describe("Economist RSS parsing", () => {
 
     assert.equal(parsed.items.length, 3);
     assert.equal(parsed.items[0].title, "The US in Brief: A big night in New York");
-    assert.deepEqual(parsed.items[0].categories, ["In Brief", "United States"]);
-    assert.equal(parsed.items[0].section, "In Brief");
+    assert.deepEqual(parsed.items[0].categories, ["The US in Brief", "In Brief", "United States"]);
+    assert.equal(parsed.items[0].section, "The US in Brief");
     assert.deepEqual(parsed.items[1].categories, ["The World in Brief"]);
     assert.equal(parsed.items[1].section, "The World in Brief");
     assert.deepEqual(parsed.items[2].categories, ["Leaders"]);
@@ -124,6 +135,34 @@ describe("Economist RSS parsing", () => {
     assert.match(globalThis.__lastFetchUrl, /[?&]category=United\+States(?:&|$)/);
   });
 
+  it("keeps The US in Brief separate from the United States section", async () => {
+    const env = feedEnv(sampleFeed);
+    const unitedStates = await economistSearch(env, {
+      section: "United States",
+      limit: 10,
+      refresh: true,
+    });
+    const usInBrief = await economistSearch(env, {
+      section: "US in Brief",
+      limit: 10,
+      refresh: true,
+    });
+
+    const url = new URL(globalThis.__lastFetchUrl);
+
+    assert.equal(unitedStates.ok, true);
+    assert.deepEqual(
+      unitedStates.items.map((item) => item.title),
+      ["America tests a new policy"]
+    );
+    assert.equal(usInBrief.ok, true);
+    assert.deepEqual(
+      usInBrief.items.map((item) => item.title),
+      ["The US in Brief: A big night in New York"]
+    );
+    assert.deepEqual(url.searchParams.getAll("category"), ["In Brief"]);
+  });
+
   it("supports section aliases and multi-category section filters", async () => {
     const env = feedEnv(sampleFeed);
     const result = await economistSearch(env, {
@@ -147,7 +186,7 @@ describe("Economist RSS parsing", () => {
     assert.equal(result.ok, true);
     assert.deepEqual(
       result.sections.map((section) => section.section).sort(),
-      ["Business and Finance", "Politics", "The United States"].sort()
+      ["Business and Finance", "In Brief", "Politics", "The US in Brief", "United States"].sort()
     );
   });
 

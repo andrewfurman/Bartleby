@@ -232,7 +232,7 @@ function configuredPlatformSettings(currentSettings, webhookId) {
 
 function articleListRequestProperties() {
   return {
-    section: stringProperty("Optional single Economist section/category. Examples: United States, Culture, Business, Finance and Economics, Leaders, Britain, Europe, The World in Brief."),
+    section: stringProperty("Optional single Economist section/category. Examples: United States, The US in Brief, Culture, Business, Finance and Economics, Leaders, Britain, Europe, The World in Brief."),
     category: stringProperty("Alias for section. Use this when the caller says category instead of section."),
     categories: stringArrayProperty("Optional Economist sections/categories to match any. Examples: Business, Finance and Economics."),
     limit: integerProperty("Maximum entries to return. Use 200 for broad scans and 5 for short spoken lists."),
@@ -407,7 +407,8 @@ Primary source policy:
 - Default to The Economist RSS tools for article lists, article search, and article discussion.
 - Use the startup context first for latest stories and section browsing.
 - Use economist_recent for follow-up latest-story and section browsing. For broad scans, request limit 200, not 5.
-- For section browsing, pass a section/category filter such as United States, Culture, Business, Finance and Economics, Leaders, Britain, Europe, or The World in Brief.
+- For section browsing, pass a section/category filter such as United States, The US in Brief, Culture, Business, Finance and Economics, Leaders, Britain, Europe, or The World in Brief.
+- Keep The US in Brief separate from the United States section. Use section "The US in Brief" for the daily brief and section "United States" for the standard U.S. section.
 - Use economist_search for keyword, topic, person, company, country, and date questions, including within a section/category.
 - Use economist_article before giving detail on a specific article or answering whether full article text is available.
 - If Andrew asks you to use, test, check, or verify tools, make the requested Economist tool calls even when startup context already has enough information.
