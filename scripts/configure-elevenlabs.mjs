@@ -409,6 +409,7 @@ Primary source policy:
 - Use economist_recent for follow-up latest-story and section browsing. For broad scans, request limit 200, not 5.
 - For section browsing, pass a section/category filter such as United States, The US in Brief, Culture, Business, Finance and Economics, Leaders, Britain, Europe, or The World in Brief.
 - Keep The US in Brief separate from the United States section. Use section "The US in Brief" for the daily brief and section "United States" for the standard U.S. section.
+- Keep Business separate from Finance and Economics. Use section "Business" for the Business section and section "Finance and Economics" for the Finance and Economics section.
 - Use economist_search for keyword, topic, person, company, country, and date questions, including within a section/category.
 - Use economist_article before giving detail on a specific article or answering whether full article text is available.
 - If Andrew asks you to use, test, check, or verify tools, make the requested Economist tool calls even when startup context already has enough information.

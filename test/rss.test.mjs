@@ -25,10 +25,17 @@ const sampleFeed = `<?xml version="1.0"?>
       <content:encoded><![CDATA[<p>A full daily political update from The Economist.</p><p>More brief context.</p>]]></content:encoded>
     </item>
     <item>
-      <title>Markets in brief</title>
+      <title>A new business strategy</title>
       <link>https://www.economist.com/business/2026/06/24/markets</link>
       <pubDate>Wed, 24 Jun 2026 10:00:00 GMT</pubDate>
-      <category>Business and Finance</category>
+      <category>Business</category>
+      <description>Business excerpt.</description>
+    </item>
+    <item>
+      <title>Markets in brief</title>
+      <link>https://www.economist.com/finance-and-economics/2026/06/24/markets</link>
+      <pubDate>Wed, 24 Jun 2026 09:00:00 GMT</pubDate>
+      <category>Finance and Economics</category>
       <description>Market excerpt.</description>
     </item>
   </channel>
@@ -73,7 +80,7 @@ describe("Economist RSS parsing", () => {
       private: true,
     });
 
-    assert.equal(parsed.items.length, 3);
+    assert.equal(parsed.items.length, 4);
     assert.deepEqual(parsed.items[0].categories, ["United States", "Politics"]);
     assert.equal(parsed.items[0].section, "United States");
     assert.deepEqual(parsed.items[1].categories, ["The US in Brief", "In Brief", "United States"]);
@@ -163,20 +170,33 @@ describe("Economist RSS parsing", () => {
     assert.deepEqual(url.searchParams.getAll("category"), ["In Brief"]);
   });
 
-  it("supports section aliases and multi-category section filters", async () => {
+  it("keeps Business separate from Finance and Economics", async () => {
     const env = feedEnv(sampleFeed);
-    const result = await economistSearch(env, {
-      section: "Business and Finance",
+    const business = await economistSearch(env, {
+      section: "Business",
       limit: 5,
       refresh: true,
     });
+    const businessUrl = new URL(globalThis.__lastFetchUrl);
+    const finance = await economistSearch(env, {
+      section: "Finance and Economics",
+      limit: 5,
+      refresh: true,
+    });
+    const financeUrl = new URL(globalThis.__lastFetchUrl);
 
-    const url = new URL(globalThis.__lastFetchUrl);
-
-    assert.equal(result.ok, true);
-    assert.equal(result.returned_count, 1);
-    assert.equal(result.items[0].title, "Markets in brief");
-    assert.deepEqual(url.searchParams.getAll("category"), ["Business", "Finance and Economics"]);
+    assert.equal(business.ok, true);
+    assert.deepEqual(
+      business.items.map((item) => item.title),
+      ["A new business strategy"]
+    );
+    assert.deepEqual(businessUrl.searchParams.getAll("category"), ["Business"]);
+    assert.equal(finance.ok, true);
+    assert.deepEqual(
+      finance.items.map((item) => item.title),
+      ["Markets in brief"]
+    );
+    assert.deepEqual(financeUrl.searchParams.getAll("category"), ["Finance and Economics"]);
   });
 
   it("lists sections by category counts", async () => {
@@ -186,7 +206,7 @@ describe("Economist RSS parsing", () => {
     assert.equal(result.ok, true);
     assert.deepEqual(
       result.sections.map((section) => section.section).sort(),
-      ["Business and Finance", "In Brief", "Politics", "The US in Brief", "United States"].sort()
+      ["Business", "Finance and Economics", "In Brief", "Politics", "The US in Brief", "United States"].sort()
     );
   });
 

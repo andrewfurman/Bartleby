@@ -807,7 +807,6 @@ function expandSectionAlias(value) {
     "the united states in brief": ["The US in Brief"],
     "world in brief": ["The World in Brief"],
     "the world in brief": ["The World in Brief"],
-    "business and finance": ["Business", "Finance and Economics"],
     business: ["Business"],
     finance: ["Finance and Economics"],
     "finance economics": ["Finance and Economics"],

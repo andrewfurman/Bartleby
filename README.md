@@ -10,7 +10,7 @@ Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 
 - Call a phone number and talk to an ElevenLabs Conversational AI agent named Bartleby.
 - Ask for the latest items across the feed, or narrow by *The Economist* section.
-- Use RSS `category` tags as first-class section metadata when present, including sections such as `The World in Brief`, `The U.S. in Brief`, `Leaders`, `The United States`, `Business and Finance`, `Culture`, and `Obituary`.
+- Use RSS `category` tags as first-class section metadata when present, including sections such as `The World in Brief`, `The US in Brief`, `Leaders`, `United States`, `Business`, `Finance and Economics`, `Culture`, and `Obituary`.
 - Fall back to conservative Economist URL/title section inference when public feeds omit category tags.
 - Preload startup context for each call: latest U.S. in Brief if present, latest World in Brief if present, and up to 200 recent Economist RSS articles.
 - Retrieve article text from the configured RSS feed when the feed provides it.
@@ -97,7 +97,7 @@ Bartleby should support one or more configured Economist RSS or Atom feeds. The 
 
 For the best Economist coverage, point Bartleby at Andrew's private `economist-newspaper-rss-feed` server instead of the public Economist RSS feed. That service combines the public latest and section feeds, adds full-text subscriber article bodies when available, emits RSS `<category>` tags, and includes special authenticated handling for `The World in Brief`, which is not exposed as a normal dated item in the public RSS feeds.
 
-Bartleby uses the private RSS server's category-filtering extension for section queries. Calls such as `economist_recent` or `economist_search` with `section: "United States"` fetch the feed with `category=United%20States`, then apply a local category fallback. Bartleby treats `The US in Brief` as separate from the standard `United States` section, even though the private feed tags U.S. brief entries with `United States` for RSS-reader discovery. This also supports sections such as `Culture`, `Business`, `Finance and Economics`, `Leaders`, `Britain`, `Europe`, and `The World in Brief`.
+Bartleby uses the private RSS server's category-filtering extension for section queries. Calls such as `economist_recent` or `economist_search` with `section: "United States"` fetch the feed with `category=United%20States`, then apply a local category fallback. Bartleby treats `The US in Brief` as separate from the standard `United States` section, even though the private feed tags U.S. brief entries with `United States` for RSS-reader discovery. It also keeps `Business` separate from `Finance and Economics`. This supports sections such as `Culture`, `Business`, `Finance and Economics`, `Leaders`, `Britain`, `Europe`, and `The World in Brief`.
 
 Configure the private feed as:
 
@@ -250,7 +250,8 @@ The smoke test verifies deployed health, optionally checks the Economist tool, i
 8. Run a live conversation smoke test:
    - "What is new in The World in Brief?"
    - "What are the latest U.S. stories?"
-   - "Find recent Business and Finance pieces about AI."
+   - "Find recent Business pieces about AI."
+   - "Find recent Finance and Economics pieces about markets."
    - "Tell me more about the second article."
    - "Search the web for background on that topic."
 
