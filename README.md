@@ -2,6 +2,8 @@
 
 Bartleby is a phone-callable ElevenLabs voice agent for talking through recent articles from *The Economist*. The goal is simple: call Bartleby, ask what is new in *The Economist*, and have a conversation grounded primarily in the current RSS feed.
 
+Call Bartleby at **+1 959-991-1122**.
+
 This repository is intentionally standalone. It is modeled on the operating pattern of Andrew Furman's Phone Claw project, but it should not depend on Phone Claw code, configuration, or deployment state. Bartleby can consume Andrew's separate private Economist RSS server as a configured RSS source, but it should not import or duplicate that repository's subscriber-login/browser-fetch code.
 
 Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
@@ -15,7 +17,7 @@ Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 - Preload startup context for each call: latest U.S. in Brief if present, latest World in Brief if present, and up to 200 recent Economist RSS articles.
 - Retrieve article text from the configured RSS feed when the feed provides it.
 - Default to *The Economist* RSS feed for answers; use web search only when the caller explicitly asks for outside context or the feed clearly cannot answer.
-- Keep private feed URLs, tokens, phone numbers, and provider credentials outside the public repository.
+- Keep private feed URLs, tokens, caller allow-list numbers, and provider credentials outside the public repository.
 
 ## Relationship To Phone Claw
 
@@ -179,7 +181,7 @@ ELEVENLABS_POST_CALL_WEBHOOK_ID=
 ELEVENLABS_POST_CALL_TOKEN=
 ELEVENLABS_WEBHOOK_SECRET=
 
-TWILIO_PHONE_NUMBER=
+TWILIO_PHONE_NUMBER=+19599911122
 TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
 TWILIO_API_KEY_SID=
@@ -203,7 +205,7 @@ TAVILY_SEARCH_DEPTH=basic
 
 The default `ELEVENLABS_VOICE_ID` is ElevenLabs' Daniel voice, a British male broadcaster-style voice. Override it with another available ElevenLabs voice ID if desired.
 
-Do not commit `.env`, provider secrets, real phone numbers, subscriber RSS URLs, API keys, cookies, browser profiles, or exported configs that contain live operational identifiers.
+Do not commit `.env`, provider secrets, private caller numbers, subscriber RSS URLs, API keys, cookies, browser profiles, or exported configs that contain live operational identifiers.
 
 ## Local Commands
 
