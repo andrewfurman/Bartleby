@@ -194,7 +194,7 @@ describe("Economist RSS parsing", () => {
     ]);
     assert.equal(
       result.greeting,
-      "Hey, it's Bartleby. Just checking the headlines right now. The top two stories from the most recent World in Brief are story number one, Huge earthquakes hit Venezuela, and story number two, Apple makes a drastic price hike."
+      "Hey, this is the helpful version of Bartleby. The latest news from The World in Brief as of June 24, 2026 at 8 p.m. Eastern, June 25, 2026 at midnight GMT is: Huge earthquakes hit Venezuela, and Apple makes a drastic price hike. What would you like to dive into in today's news?"
     );
   });
 

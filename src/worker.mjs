@@ -18,6 +18,9 @@ const XML_HEADERS = {
 
 const OUTSIDE_COVERAGE_MESSAGE =
   "This number is for Andrew's Bartleby bot and is not available from this caller.";
+const DEFAULT_TWILIO_BOOTSTRAP_TIMEOUT_MS = 4500;
+const FALLBACK_STARTUP_GREETING =
+  "Hey, this is the helpful version of Bartleby. What would you like to dive into in today's news?";
 
 export default {
   async fetch(request, env, ctx) {
@@ -196,7 +199,8 @@ async function handleTwilioInbound(request, env) {
 
 async function registerElevenLabsCall(env, request, { fromNumber, toNumber, callSid, direction }) {
   const apiBase = env.ELEVENLABS_API_BASE || "https://api.elevenlabs.io";
-  const bootstrap = await economistBootstrap(env, {});
+  const startedAt = Date.now();
+  const bootstrap = await economistBootstrapForTwilio(env);
   const response = await fetch(`${apiBase}/v1/convai/twilio/register-call`, {
     method: "POST",
     headers: {
@@ -216,10 +220,12 @@ async function registerElevenLabsCall(env, request, { fromNumber, toNumber, call
           telephony_audio_format: env.ELEVENLABS_TELEPHONY_AUDIO_FORMAT || "ulaw_8000",
           bartleby_bootstrap_status: bootstrap.ok ? "ok" : bootstrap.status || "error",
           bartleby_bootstrap_context: bootstrap.ok ? bootstrap.context_text : bootstrap.answer_text || "",
-          bartleby_greeting: bootstrap.ok ? bootstrap.greeting || "" : "",
+          bartleby_greeting: bootstrap.ok ? bootstrap.greeting || FALLBACK_STARTUP_GREETING : FALLBACK_STARTUP_GREETING,
           bartleby_recent_article_count: bootstrap.ok ? String(bootstrap.recent_article_count) : "0",
           bartleby_us_in_brief_title: bootstrap.ok && bootstrap.us_in_brief ? bootstrap.us_in_brief.title : "",
           bartleby_world_in_brief_title: bootstrap.ok && bootstrap.world_in_brief ? bootstrap.world_in_brief.title : "",
+          bartleby_world_in_brief_published_time:
+            bootstrap.ok && bootstrap.world_in_brief_published_time ? bootstrap.world_in_brief_published_time : "",
           bartleby_world_in_brief_story_1:
             bootstrap.ok && bootstrap.world_in_brief_headlines ? bootstrap.world_in_brief_headlines[0] || "" : "",
           bartleby_world_in_brief_story_2:
@@ -235,7 +241,51 @@ async function registerElevenLabsCall(env, request, { fromNumber, toNumber, call
     throw new Error(`ElevenLabs register-call failed (${response.status}): ${text.slice(0, 800)}`);
   }
 
+  await storeTwilioEvent(env, {
+    source: "twilio_inbound",
+    payload: {
+      callSid,
+      bootstrap_status: bootstrap.ok ? "ok" : bootstrap.status || "error",
+      bootstrap_elapsed_ms: Date.now() - startedAt,
+      register_status: response.status,
+    },
+    twilio_call_sid: callSid,
+    event_type: "elevenlabs_register_succeeded",
+    call_status: "registered",
+    caller_number: fromNumber,
+    called_number: toNumber,
+    occurred_at: nowIso(),
+  }).catch(() => {});
+
   return attachStreamStatusCallback(extractTwiml(text, contentType), callbackUrl(request, env, "/twilio/stream-status"));
+}
+
+async function economistBootstrapForTwilio(env) {
+  const timeoutMs = clampInteger(
+    env.BARTLEBY_TWILIO_BOOTSTRAP_TIMEOUT_MS,
+    1000,
+    12000,
+    DEFAULT_TWILIO_BOOTSTRAP_TIMEOUT_MS
+  );
+  const bootstrap = economistBootstrap(env, {}).catch((error) => ({
+    ok: false,
+    status: "bootstrap_error",
+    answer_text: `The Economist RSS startup context failed before the call connected: ${
+      error?.message || String(error)
+    }`,
+  }));
+  const timeout = new Promise((resolve) => {
+    setTimeout(
+      () =>
+        resolve({
+          ok: false,
+          status: "bootstrap_timeout",
+          answer_text: "The Economist RSS feed took too long to load before the call connected.",
+        }),
+      timeoutMs
+    );
+  });
+  return Promise.race([bootstrap, timeout]);
 }
 
 async function handleTwilioStatus(request, env, ctx, source) {

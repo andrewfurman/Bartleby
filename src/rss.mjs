@@ -8,9 +8,9 @@ const DEFAULT_BOOTSTRAP_LIMIT = 200;
 const DEFAULT_BOOTSTRAP_MAX_CHARS = 60_000;
 const FULL_TEXT_MIN_CHARS = 700;
 const DEFAULT_GREETING_TEMPLATE =
-  "Hey, it's Bartleby. Just checking the headlines right now. The top two stories from the most recent World in Brief are story number one, {story_1}, and story number two, {story_2}.";
+  "Hey, this is the helpful version of Bartleby. The latest news from The World in Brief as of {published_time} is: {stories}. What would you like to dive into in today's news?";
 const FALLBACK_GREETING =
-  "Hey, it's Bartleby. Just checking the headlines right now. What would you like to discuss?";
+  "Hey, this is the helpful version of Bartleby. What would you like to dive into in today's news?";
 
 let feedCache = null;
 
@@ -143,6 +143,7 @@ export async function economistBootstrap(env, options = {}) {
   const usInBrief = latestBriefEntry(result.items, "us");
   const worldInBrief = latestBriefEntry(result.items, "world");
   const worldInBriefHeadlines = worldInBrief ? worldBriefHeadlines(worldInBrief) : [];
+  const worldInBriefPublishedTime = worldInBriefPublishedLabel(worldInBrief);
   const contextText = truncate(bootstrapContextText(result, recentArticles, usInBrief, worldInBrief), maxChars);
 
   return {
@@ -156,7 +157,8 @@ export async function economistBootstrap(env, options = {}) {
     us_in_brief: usInBrief ? bootstrapEntry(usInBrief, { excerptChars: 900 }) : null,
     world_in_brief: worldInBrief ? bootstrapEntry(worldInBrief, { excerptChars: 900 }) : null,
     world_in_brief_headlines: worldInBriefHeadlines,
-    greeting: greetingText(env.BARTLEBY_GREETING_TEMPLATE, worldInBriefHeadlines),
+    world_in_brief_published_time: worldInBriefPublishedTime,
+    greeting: greetingText(env.BARTLEBY_GREETING_TEMPLATE, worldInBriefHeadlines, worldInBrief),
     recent_articles: recentArticles,
     context_text: contextText.value,
     context_truncated: contextText.truncated,
@@ -565,13 +567,57 @@ function truncateHeadline(value) {
   return truncate(text, 160).value;
 }
 
-function greetingText(template, headlines) {
+function greetingText(template, headlines, worldInBrief) {
   const story1 = normalize(headlines?.[0]);
   const story2 = normalize(headlines?.[1]);
-  if (!story1 || !story2) return FALLBACK_GREETING;
+  if (!story1) return FALLBACK_GREETING;
+  const stories = story2 ? `${story1}, and ${story2}` : story1;
+  const publishedTime = worldInBriefPublishedLabel(worldInBrief);
   return normalize(template || DEFAULT_GREETING_TEMPLATE)
     .replace(/\{story_1\}/g, story1)
-    .replace(/\{story_2\}/g, story2);
+    .replace(/\{story_2\}/g, story2)
+    .replace(/\{stories\}/g, stories)
+    .replace(/\{published_time\}/g, publishedTime)
+    .replace(/\{published_at\}/g, normalize(worldInBrief?.published_at || worldInBrief?.updated_at));
+}
+
+function worldInBriefPublishedLabel(item) {
+  const date = new Date(item?.published_at || item?.updated_at || "");
+  if (Number.isNaN(date.getTime())) return "the latest update";
+  const easternDate = formatDateInZone(date, "America/New_York");
+  const easternTime = formatTimeInZone(date, "America/New_York");
+  const gmtDate = formatDateInZone(date, "UTC");
+  const gmtTime = formatTimeInZone(date, "UTC");
+  if (gmtDate !== easternDate) return `${easternDate} at ${easternTime} Eastern, ${gmtDate} at ${gmtTime} GMT`;
+  return `${easternDate} at ${easternTime} Eastern, ${gmtTime} GMT`;
+}
+
+function formatDateInZone(date, timeZone) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function formatTimeInZone(date, timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+  if (parts.hour === "12" && parts.minute === "00" && parts.dayPeriod?.toLowerCase() === "am") return "midnight";
+  if (parts.hour === "12" && parts.minute === "00" && parts.dayPeriod?.toLowerCase() === "pm") return "noon";
+  const minute = parts.minute === "00" ? "" : `:${parts.minute}`;
+  const period = parts.dayPeriod?.toLowerCase() === "am" ? "a.m." : "p.m.";
+  return `${parts.hour}${minute} ${period}`;
 }
 
 function isFullBriefDescription({ title = "", url = "", categories = [], text = "" }) {
