@@ -38,6 +38,7 @@ export default {
           economist_article: "POST /tools/economist/article",
           economist_bootstrap: "POST /tools/economist/bootstrap",
           web_search: "POST /tools/web-search",
+          hang_up: "POST /tools/call/hang-up",
           admin_conversations: "GET /admin/conversations",
         },
       });
@@ -107,6 +108,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/tools/web-search") {
       return withToolAuth(request, env, async () => json(await webSearch(env, await requestJson(request))));
+    }
+
+    if (request.method === "POST" && url.pathname === "/tools/call/hang-up") {
+      return withToolAuth(request, env, async () => json(await hangUpCall(env, await requestJson(request))));
     }
 
     if (request.method === "GET" && url.pathname === "/admin/conversations") {
@@ -211,9 +216,14 @@ async function registerElevenLabsCall(env, request, { fromNumber, toNumber, call
           telephony_audio_format: env.ELEVENLABS_TELEPHONY_AUDIO_FORMAT || "ulaw_8000",
           bartleby_bootstrap_status: bootstrap.ok ? "ok" : bootstrap.status || "error",
           bartleby_bootstrap_context: bootstrap.ok ? bootstrap.context_text : bootstrap.answer_text || "",
+          bartleby_greeting: bootstrap.ok ? bootstrap.greeting || "" : "",
           bartleby_recent_article_count: bootstrap.ok ? String(bootstrap.recent_article_count) : "0",
           bartleby_us_in_brief_title: bootstrap.ok && bootstrap.us_in_brief ? bootstrap.us_in_brief.title : "",
           bartleby_world_in_brief_title: bootstrap.ok && bootstrap.world_in_brief ? bootstrap.world_in_brief.title : "",
+          bartleby_world_in_brief_story_1:
+            bootstrap.ok && bootstrap.world_in_brief_headlines ? bootstrap.world_in_brief_headlines[0] || "" : "",
+          bartleby_world_in_brief_story_2:
+            bootstrap.ok && bootstrap.world_in_brief_headlines ? bootstrap.world_in_brief_headlines[1] || "" : "",
         },
       },
     }),
@@ -701,6 +711,133 @@ async function webSearch(env, { query = "", max_results: maxResults = 3 } = {}) 
     provider_errors: providerErrors.slice(0, 5),
     results: [],
   };
+}
+
+async function hangUpCall(env, { twilio_call_sid: callSid = "", user_request: userRequest = "", reason = "" } = {}) {
+  const normalizedCallSid = normalize(callSid);
+  const normalizedRequest = normalize(userRequest || reason);
+  if (!normalizedCallSid) {
+    return {
+      ok: false,
+      status: "missing_twilio_call_sid",
+      answer_text: "I cannot hang up because the current Twilio call SID is missing.",
+    };
+  }
+
+  if (!isClearHangupRequest(normalizedRequest)) {
+    return {
+      ok: false,
+      status: "needs_confirmation",
+      twilio_call_sid: normalizedCallSid,
+      answer_text: "Confirm before hanging up. The caller has not clearly asked to end the call.",
+    };
+  }
+
+  const auth = twilioRestAuth(env);
+  if (!auth.ok) {
+    await storeTwilioEvent(env, {
+      source: "hang_up_tool",
+      payload: { status: auth.status, twilio_call_sid: normalizedCallSid, user_request: normalizedRequest },
+      twilio_call_sid: normalizedCallSid,
+      event_type: "hang_up_not_configured",
+      call_status: "hang_up_not_configured",
+      occurred_at: nowIso(),
+    }).catch(() => {});
+    return {
+      ok: false,
+      status: auth.status,
+      twilio_call_sid: normalizedCallSid,
+      answer_text: "I cannot hang up because Twilio REST credentials are not configured.",
+    };
+  }
+
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(auth.accountSid)}/Calls/${encodeURIComponent(
+      normalizedCallSid
+    )}.json`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${auth.basic}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ Status: "completed" }),
+    }
+  );
+  const body = await response.json().catch(() => ({}));
+  const ok = response.ok;
+
+  await storeTwilioEvent(env, {
+    source: "hang_up_tool",
+    payload: {
+      twilio_call_sid: normalizedCallSid,
+      user_request: normalizedRequest,
+      upstream_status: response.status,
+      twilio_status: body.status || "",
+      twilio_code: body.code || "",
+      twilio_message: body.message || "",
+    },
+    twilio_call_sid: normalizedCallSid,
+    event_type: ok ? "hang_up_requested" : "hang_up_failed",
+    call_status: ok ? "completed" : "hang_up_failed",
+    occurred_at: nowIso(),
+  }).catch(() => {});
+
+  if (ok) {
+    await upsertCallFromTwilio(env, {
+      twilio_call_sid: normalizedCallSid,
+      status: "completed",
+      ended_at: nowIso(),
+    }).catch(() => {});
+    return {
+      ok: true,
+      status: "completed",
+      twilio_call_sid: normalizedCallSid,
+      answer_text: "Ending the call now.",
+    };
+  }
+
+  return {
+    ok: false,
+    status: "twilio_hang_up_failed",
+    upstream_status: response.status,
+    twilio_call_sid: normalizedCallSid,
+    answer_text: "I tried to hang up, but Twilio did not complete the call.",
+  };
+}
+
+function isClearHangupRequest(value) {
+  const text = normalize(value).toLowerCase();
+  if (!text) return false;
+  if (/\b(hang\s*up|disconnect|end (the |this )?call|terminate (the |this )?call)\b/.test(text)) return true;
+  if (/\b(goodbye|good bye|bye|bye-bye|see you|talk to you later|talk later)\b/.test(text)) return true;
+  return false;
+}
+
+function twilioRestAuth(env) {
+  const accountSid = normalize(env.TWILIO_ACCOUNT_SID);
+  if (!accountSid) return { ok: false, status: "twilio_account_sid_not_configured" };
+
+  const apiKeySid = normalize(env.TWILIO_API_KEY_SID);
+  const apiKeySecret = normalize(env.TWILIO_API_KEY_SECRET);
+  if (apiKeySid && apiKeySecret) {
+    return {
+      ok: true,
+      accountSid,
+      basic: btoa(`${apiKeySid}:${apiKeySecret}`),
+    };
+  }
+
+  const authToken = normalize(env.TWILIO_AUTH_TOKEN);
+  if (authToken) {
+    return {
+      ok: true,
+      accountSid,
+      basic: btoa(`${accountSid}:${authToken}`),
+    };
+  }
+
+  return { ok: false, status: "twilio_rest_credentials_not_configured" };
 }
 
 async function cloudflareWebSearch(binding, query, maxResults) {

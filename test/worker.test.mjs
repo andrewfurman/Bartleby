@@ -111,4 +111,84 @@ describe("Worker tools", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("does not hang up when the caller intent is ambiguous", async () => {
+    const originalFetch = globalThis.fetch;
+    let twilioCalled = false;
+    globalThis.fetch = async () => {
+      twilioCalled = true;
+      throw new Error("Twilio should not be called for ambiguous hang-up text.");
+    };
+
+    try {
+      const response = await worker.fetch(
+        new Request("https://bartleby.example/tools/call/hang-up", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer test-tool-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ twilio_call_sid: "CA123", user_request: "thanks" }),
+        }),
+        { BARTLEBY_TOOL_TOKEN: "test-tool-token" },
+        {}
+      );
+      const body = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, false);
+      assert.equal(body.status, "needs_confirmation");
+      assert.equal(twilioCalled, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("hangs up through Twilio when the caller clearly says goodbye", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ status: "completed" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    try {
+      const response = await worker.fetch(
+        new Request("https://bartleby.example/tools/call/hang-up", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer test-tool-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            twilio_call_sid: "CA123",
+            user_request: "Thanks, that's all, goodbye.",
+          }),
+        }),
+        {
+          BARTLEBY_TOOL_TOKEN: "test-tool-token",
+          TWILIO_ACCOUNT_SID: "AC123",
+          TWILIO_API_KEY_SID: "SK123",
+          TWILIO_API_KEY_SECRET: "secret",
+        },
+        {}
+      );
+      const body = await response.json();
+      const form = new URLSearchParams(calls[0].options.body);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.status, "completed");
+      assert.equal(calls.length, 1);
+      assert.match(calls[0].url, /\/Accounts\/AC123\/Calls\/CA123\.json$/);
+      assert.equal(calls[0].options.method, "POST");
+      assert.equal(form.get("Status"), "completed");
+      assert.match(calls[0].options.headers.authorization, /^Basic /);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

@@ -7,6 +7,10 @@ const DEFAULT_MAX_TEXT_CHARS = 60_000;
 const DEFAULT_BOOTSTRAP_LIMIT = 200;
 const DEFAULT_BOOTSTRAP_MAX_CHARS = 60_000;
 const FULL_TEXT_MIN_CHARS = 700;
+const DEFAULT_GREETING_TEMPLATE =
+  "Hey, it's Bartleby. Just checking the headlines right now. The top two stories from the most recent World in Brief are story number one, {story_1}, and story number two, {story_2}.";
+const FALLBACK_GREETING =
+  "Hey, it's Bartleby. Just checking the headlines right now. What would you like to discuss?";
 
 let feedCache = null;
 
@@ -138,6 +142,7 @@ export async function economistBootstrap(env, options = {}) {
     .map((item) => bootstrapEntry(item));
   const usInBrief = latestBriefEntry(result.items, "us");
   const worldInBrief = latestBriefEntry(result.items, "world");
+  const worldInBriefHeadlines = worldInBrief ? worldBriefHeadlines(worldInBrief) : [];
   const contextText = truncate(bootstrapContextText(result, recentArticles, usInBrief, worldInBrief), maxChars);
 
   return {
@@ -150,6 +155,8 @@ export async function economistBootstrap(env, options = {}) {
     recent_article_count: recentArticles.length,
     us_in_brief: usInBrief ? bootstrapEntry(usInBrief, { excerptChars: 900 }) : null,
     world_in_brief: worldInBrief ? bootstrapEntry(worldInBrief, { excerptChars: 900 }) : null,
+    world_in_brief_headlines: worldInBriefHeadlines,
+    greeting: greetingText(env.BARTLEBY_GREETING_TEMPLATE, worldInBriefHeadlines),
     recent_articles: recentArticles,
     context_text: contextText.value,
     context_truncated: contextText.truncated,
@@ -526,6 +533,45 @@ function isWorldInBrief(item) {
 
 function isBriefEntry(item) {
   return isUsInBrief(item) || isWorldInBrief(item);
+}
+
+function worldBriefHeadlines(item) {
+  const titleText = normalize(item.title).replace(/^(the )?world in brief:\s*/i, "");
+  const titleParts = titleText
+    .split(/\s*;\s*/)
+    .map((part) => truncateHeadline(part))
+    .filter(Boolean);
+  if (titleParts.length >= 2) return titleParts.slice(0, 2);
+
+  const textParts = sentenceHeadlines(item.summary || item.full_text || "");
+  return uniqueStrings([...titleParts, ...textParts]).slice(0, 2);
+}
+
+function sentenceHeadlines(text) {
+  return normalizeArticleText(text)
+    .replace(/^(the )?world in brief\b/i, "")
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => truncateHeadline(part))
+    .filter((part) => part && !/^\d+\s+of\s+\d+\b/i.test(part))
+    .slice(0, 4);
+}
+
+function truncateHeadline(value) {
+  const text = normalize(value)
+    .replace(/^\d+\s+of\s+\d+\s*/i, "")
+    .replace(/^\(?updated\b.*?\)\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return truncate(text, 160).value;
+}
+
+function greetingText(template, headlines) {
+  const story1 = normalize(headlines?.[0]);
+  const story2 = normalize(headlines?.[1]);
+  if (!story1 || !story2) return FALLBACK_GREETING;
+  return normalize(template || DEFAULT_GREETING_TEMPLATE)
+    .replace(/\{story_1\}/g, story1)
+    .replace(/\{story_2\}/g, story2);
 }
 
 function isFullBriefDescription({ title = "", url = "", categories = [], text = "" }) {

@@ -63,6 +63,7 @@ The ElevenLabs agent should have a small, explicit tool set:
 | `economist_article` | Retrieve the full text or longest available RSS text for a specific entry. |
 | `economist_bootstrap` | Build startup context with the latest briefs and recent-article index. Used by the Twilio inbound webhook before the first agent turn. |
 | `web_search` | Look up external background only when the caller asks for non-Economist context or the RSS feed clearly does not contain the answer. |
+| `hang_up` | End the current Twilio call only after the caller clearly says goodbye or explicitly asks to hang up. |
 
 Tool responses should include stable entry IDs, title, URL, author when available, published date, section/category list, excerpt, and a short `answer_text` field that is safe for the voice agent to read aloud.
 
@@ -145,6 +146,7 @@ If the feed only includes an excerpt, Bartleby should say that clearly instead o
 Bartleby should answer like an informed, concise reading companion:
 
 - Prefer *The Economist* RSS feed over web search.
+- Start calls with the dynamic `bartleby_greeting`, which includes the top two headlines from the latest World in Brief when available.
 - Mention the article title and section when grounding an answer.
 - Distinguish what the article says from outside context.
 - Use web search only when the caller explicitly asks for outside information, newer developments beyond an article, background on a person/place/company not explained in the article, or when RSS tools return no relevant Economist material.
@@ -153,6 +155,8 @@ Bartleby should answer like an informed, concise reading companion:
 - Treat "web search", "outside web context", "outside The Economist", and "use the web search tool" as explicit external-search requests; do not name an outside source until `web_search` has returned results.
 - When web search is used, state that the added context comes from outside *The Economist*.
 - When the caller asks for more detail about a listed article, call `economist_article` immediately instead of asking whether to retrieve the full text. Do this before saying full text is unavailable.
+- Do not hang up on ambiguous politeness such as "thanks" or "okay"; ask for confirmation first.
+- If the caller clearly says goodbye or explicitly asks to hang up, disconnect, or end the call, say a brief goodbye and call `hang_up`.
 - Say when the feed has no matching article or when only an excerpt is available.
 - Keep spoken answers compact, then offer to go deeper.
 
@@ -170,6 +174,7 @@ ELEVENLABS_AGENT_ID=
 ELEVENLABS_API_BASE=https://api.elevenlabs.io
 ELEVENLABS_TELEPHONY_AUDIO_FORMAT=ulaw_8000
 ELEVENLABS_VOICE_ID=onwK4e9ZLuTAKqWW03F9
+ELEVENLABS_FIRST_MESSAGE={{bartleby_greeting}}
 ELEVENLABS_POST_CALL_WEBHOOK_ID=
 ELEVENLABS_POST_CALL_TOKEN=
 ELEVENLABS_WEBHOOK_SECRET=
@@ -188,6 +193,7 @@ ECONOMIST_RSS_CACHE_SECONDS=900
 ECONOMIST_RSS_TIMEOUT_MS=25000
 BARTLEBY_BOOTSTRAP_ARTICLE_LIMIT=200
 BARTLEBY_BOOTSTRAP_MAX_CHARS=60000
+BARTLEBY_GREETING_TEMPLATE=Hey, it's Bartleby. Just checking the headlines right now. The top two stories from the most recent World in Brief are story number one, {story_1}, and story number two, {story_2}.
 
 WEB_SEARCH_PROVIDER=auto
 TAVILY_API_KEY=

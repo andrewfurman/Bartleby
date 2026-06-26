@@ -101,6 +101,28 @@ const fullBriefDescriptionFeed = `<?xml version="1.0"?>
   </channel>
 </rss>`;
 
+const worldBriefHeadlineFeed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>The Economist private article feed</title>
+    <item>
+      <title>World in Brief: Huge earthquakes hit Venezuela; Apple makes a drastic price hike</title>
+      <link>https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9</link>
+      <guid isPermaLink="false">world-brief-guid</guid>
+      <pubDate>Thu, 25 Jun 2026 00:00:00 GMT</pubDate>
+      <category>The World in Brief</category>
+      <description>${"Full World in Brief description text. ".repeat(40)}</description>
+    </item>
+    <item>
+      <title>A new business strategy</title>
+      <link>https://www.economist.com/business/2026/06/24/markets</link>
+      <pubDate>Wed, 24 Jun 2026 10:00:00 GMT</pubDate>
+      <category>Business</category>
+      <description>Business excerpt.</description>
+    </item>
+  </channel>
+</rss>`;
+
 describe("Economist RSS parsing", () => {
   it("preserves RSS category tags as sections", () => {
     const parsed = parseFeed(sampleFeed, {
@@ -159,6 +181,21 @@ describe("Economist RSS parsing", () => {
     assert.equal(result.world_in_brief.title, "The World in Brief: Tensions rise");
     assert.match(result.context_text, /Most recent 2 Economist RSS articles/);
     assert.match(result.context_text, /The US in Brief: A big night in New York/);
+  });
+
+  it("builds a short greeting from the top two World in Brief headlines", async () => {
+    const env = feedEnv(worldBriefHeadlineFeed);
+    const result = await economistBootstrap(env, { limit: 2, refresh: true });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.world_in_brief_headlines, [
+      "Huge earthquakes hit Venezuela",
+      "Apple makes a drastic price hike",
+    ]);
+    assert.equal(
+      result.greeting,
+      "Hey, it's Bartleby. Just checking the headlines right now. The top two stories from the most recent World in Brief are story number one, Huge earthquakes hit Venezuela, and story number two, Apple makes a drastic price hike."
+    );
   });
 
   it("sends bearer auth when configured for a private RSS feed", async () => {

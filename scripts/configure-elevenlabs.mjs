@@ -8,7 +8,7 @@ const agentName = process.env.ELEVENLABS_AGENT_NAME || "Bartleby Economist Bot";
 const postCallWebhookId = process.env.ELEVENLABS_POST_CALL_WEBHOOK_ID || "";
 const firstMessage =
   process.env.ELEVENLABS_FIRST_MESSAGE ||
-  "Hello, this is Bartleby. I have The Economist's latest feed loaded. What would you like to discuss?";
+  "{{bartleby_greeting}}";
 
 if (!apiKey) fail("Missing ELEVENLABS_API_KEY.");
 if (!publicBaseUrl) fail("Missing BARTLEBY_PUBLIC_BASE_URL.");
@@ -219,6 +219,30 @@ function toolConfigs() {
         }),
       },
     }),
+    webhookTool({
+      name: "hang_up",
+      description:
+        "End the current Twilio phone call. Use only after the caller clearly says goodbye or explicitly asks to hang up, disconnect, or end the call.",
+      url: `${publicBaseUrl}/tools/call/hang-up`,
+      required: ["twilio_call_sid", "user_request"],
+      responseTimeoutSecs: 10,
+      forcePreToolSpeech: true,
+      requestProperties: {
+        twilio_call_sid: dynamicStringProperty(
+          "Current Twilio CallSid. This must come from the twilio_call_sid dynamic variable.",
+          "twilio_call_sid"
+        ),
+        user_request: stringProperty("The caller's exact words showing they clearly want to end the call."),
+        reason: stringProperty("Short reason for ending the call."),
+      },
+      responseDescription: "Twilio hang-up result.",
+      responseProperties: {
+        ok: booleanProperty("Whether the hang-up request succeeded."),
+        status: stringProperty("Status code."),
+        twilio_call_sid: stringProperty("Twilio call SID."),
+        answer_text: stringProperty("Compact spoken summary."),
+      },
+    }),
   ];
 }
 
@@ -344,6 +368,13 @@ function stringProperty(description) {
   };
 }
 
+function dynamicStringProperty(_description, variableName) {
+  return {
+    ...stringProperty(""),
+    dynamic_variable: variableName,
+  };
+}
+
 function integerProperty(description) {
   return {
     type: "integer",
@@ -443,6 +474,12 @@ Outside web search policy:
 - Treat phrases like "search the web", "web search", "outside web context", "outside The Economist", "use web_search", and "use the web search tool" as explicit external-search requests.
 - If Andrew explicitly asks for an external-search request, call web_search before answering. Do not answer these requests from memory alone, and do not name an outside source or source title until web_search has returned results.
 - When using web_search, say the added context comes from outside The Economist.
+
+Call ending policy:
+- Do not hang up on ambiguous politeness such as "thanks", "okay", "great", or silence.
+- If Andrew says something ambiguous that might mean he is finished, ask a brief confirmation question before ending the call.
+- If Andrew clearly says goodbye or explicitly asks to hang up, disconnect, or end the call, say a brief goodbye and call hang_up immediately.
+- For hang_up, pass the exact caller phrase as user_request. The twilio_call_sid argument is supplied from the dynamic variable.
 
 Voice style:
 - Be concise and conversational.
