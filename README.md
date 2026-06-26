@@ -2,7 +2,9 @@
 
 Bartleby is a phone-callable ElevenLabs voice agent for talking through recent articles from *The Economist*. The goal is simple: call Bartleby, ask what is new in *The Economist*, and have a conversation grounded primarily in the current RSS feed.
 
-Call Bartleby at **+1 959-991-1122**.
+## Try It
+
+Anyone can try Bartleby by calling **+1 959-991-1122**. Ask what is new in *The Economist*, request the latest World in Brief headlines, or dive into a specific section such as United States, Business, Finance and Economics, Culture, Leaders, or Obituary.
 
 This repository is intentionally standalone. It is modeled on the operating pattern of Andrew Furman's Phone Claw project, but it should not depend on Phone Claw code, configuration, or deployment state. Bartleby can consume Andrew's separate private Economist RSS server as a configured RSS source, but it should not import or duplicate that repository's subscriber-login/browser-fetch code.
 
