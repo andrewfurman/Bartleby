@@ -150,7 +150,7 @@ If the feed only includes an excerpt, Bartleby should say that clearly instead o
 Bartleby should answer like an informed, concise reading companion:
 
 - Prefer *The Economist* RSS feed over web search.
-- Start calls with the dynamic `bartleby_greeting`, which presents Bartleby as the helpful version of Melville's character, gives the latest World in Brief publish time in Eastern and GMT, and includes two quick headlines when available.
+- Start calls with the dynamic `bartleby_greeting`, which gives the latest World in Brief update time in Eastern Time and includes two quick headlines when available.
 - Mention the article title and section when grounding an answer.
 - Distinguish what the article says from outside context.
 - Use web search only when the caller explicitly asks for outside information, newer developments beyond an article, background on a person/place/company not explained in the article, or when RSS tools return no relevant Economist material.
@@ -198,7 +198,7 @@ ECONOMIST_RSS_TIMEOUT_MS=25000
 BARTLEBY_BOOTSTRAP_ARTICLE_LIMIT=200
 BARTLEBY_BOOTSTRAP_MAX_CHARS=60000
 BARTLEBY_TWILIO_BOOTSTRAP_TIMEOUT_MS=4500
-BARTLEBY_GREETING_TEMPLATE=Hey, this is the helpful version of Bartleby. The latest news from The World in Brief as of {published_time} is: {stories}. What would you like to dive into in today's news?
+BARTLEBY_GREETING_TEMPLATE=Here's the latest from The World in Brief as of {published_time}: {stories}. What would you like to dive into?
 
 WEB_SEARCH_PROVIDER=auto
 TAVILY_API_KEY=

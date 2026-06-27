@@ -612,18 +612,21 @@ async function getConversation(env, conversationId) {
   )
     .bind(conversationId)
     .all();
+  const conversation = parseCallRow(call);
   const events = call.twilio_call_sid
     ? await env.DB.prepare("SELECT * FROM twilio_events WHERE twilio_call_sid = ? ORDER BY occurred_at ASC")
         .bind(call.twilio_call_sid)
         .all()
     : { results: [] };
+  const twilioEvents = (events.results || []).map(parseTwilioEventRow);
 
   return json({
     ok: true,
-    conversation: parseCallRow(call),
+    conversation,
+    diagnostics: callDiagnostics(conversation, twilioEvents),
     transcript_turns: (turns.results || []).map(parseTurnRow),
     tool_events: (tools.results || []).map(parseToolRow),
-    twilio_events: (events.results || []).map(parseTwilioEventRow),
+    twilio_events: twilioEvents,
   });
 }
 
@@ -636,7 +639,16 @@ async function getCall(env, callSid) {
   const events = await env.DB.prepare("SELECT * FROM twilio_events WHERE twilio_call_sid = ? ORDER BY occurred_at ASC")
     .bind(callSid)
     .all();
-  return json({ ok: true, conversation: parseCallRow(call), transcript_turns: [], tool_events: [], twilio_events: (events.results || []).map(parseTwilioEventRow) });
+  const conversation = parseCallRow(call);
+  const twilioEvents = (events.results || []).map(parseTwilioEventRow);
+  return json({
+    ok: true,
+    conversation,
+    diagnostics: callDiagnostics(conversation, twilioEvents),
+    transcript_turns: [],
+    tool_events: [],
+    twilio_events: twilioEvents,
+  });
 }
 
 async function webSearch(env, { query = "", max_results: maxResults = 3 } = {}) {
@@ -1096,6 +1108,86 @@ function parseTwilioEventRow(row) {
     ...row,
     payload: parseMaybeJson(row.payload_json) || {},
   };
+}
+
+function callDiagnostics(call, twilioEvents = []) {
+  const events = Array.isArray(twilioEvents) ? twilioEvents : [];
+  const durationSecs = toInteger(call?.duration_secs, null);
+  const errorEvents = events
+    .filter(isErrorTwilioEvent)
+    .map((event) => ({
+      event_type: event.event_type || "",
+      call_status: event.call_status || "",
+      occurred_at: event.occurred_at || "",
+      message: errorMessageFromTwilioEvent(event),
+    }));
+  const registeredAt = eventTime(events, "elevenlabs_register_succeeded");
+  const streamStartedAt = eventTime(events, "stream-started");
+  const streamStoppedAt = eventTime(events, "stream-stopped");
+  const completedAt =
+    eventTime(events, "completed") || (isTerminalCallStatus(call?.status) ? call?.ended_at || "" : "");
+  const endedNearTenMinuteBoundary =
+    durationSecs !== null && durationSecs >= 595 && durationSecs <= 605 && Boolean(completedAt);
+
+  let status = "ok";
+  const notes = [];
+  if (errorEvents.length) {
+    status = "logged_error";
+    notes.push("One or more Twilio or Worker events contains an error-like status or payload.");
+  } else if (endedNearTenMinuteBoundary && streamStartedAt && streamStoppedAt) {
+    status = "duration_boundary_candidate";
+    notes.push(
+      "No application error was logged. The call streamed successfully and ended near the 10-minute duration boundary."
+    );
+  } else if (completedAt) {
+    notes.push("The call reached a terminal Twilio status without a logged Worker error.");
+  } else {
+    status = "incomplete";
+    notes.push("The stored events do not include a terminal Twilio status yet.");
+  }
+
+  return {
+    status,
+    duration_secs: durationSecs,
+    ended_near_ten_minute_boundary: endedNearTenMinuteBoundary,
+    elevenlabs_registered_at: registeredAt,
+    stream_started_at: streamStartedAt,
+    stream_stopped_at: streamStoppedAt,
+    completed_at: completedAt,
+    error_event_count: errorEvents.length,
+    error_events: errorEvents,
+    notes,
+  };
+}
+
+function isErrorTwilioEvent(event) {
+  const eventType = normalize(event?.event_type).toLowerCase();
+  const callStatus = normalize(event?.call_status).toLowerCase();
+  const payload = event?.payload || {};
+  return (
+    /error|failed|failure|unauthorized|not_configured/.test(eventType) ||
+    /error|failed|failure|unauthorized|not_configured/.test(callStatus) ||
+    Boolean(payload.error || payload.Error || payload.failure_reason || payload.FailureReason || payload.code)
+  );
+}
+
+function errorMessageFromTwilioEvent(event) {
+  const payload = event?.payload || {};
+  return normalize(
+    payload.error ||
+      payload.Error ||
+      payload.message ||
+      payload.Message ||
+      payload.failure_reason ||
+      payload.FailureReason ||
+      payload.code ||
+      payload.Code ||
+      ""
+  );
+}
+
+function eventTime(events, eventType) {
+  return events.find((event) => event.event_type === eventType)?.occurred_at || "";
 }
 
 function sanitizeForStorage(value) {
