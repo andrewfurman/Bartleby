@@ -191,4 +191,81 @@ describe("Worker tools", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("diagnoses calls that end near the ten-minute boundary without logged errors", async () => {
+    const response = await worker.fetch(
+      new Request("https://bartleby.example/admin/calls/CA123", {
+        headers: { authorization: "Bearer admin-token" },
+      }),
+      {
+        ADMIN_TOKEN: "admin-token",
+        DB: fakeD1({
+          calls: [
+            {
+              twilio_call_sid: "CA123",
+              elevenlabs_conversation_id: "",
+              status: "completed",
+              ended_at: "2026-06-27T10:43:05.000Z",
+              duration_secs: 600,
+              metadata_json: "{}",
+              analysis_json: "{}",
+              initiation_json: "{}",
+            },
+          ],
+          twilio_events: [
+            eventRow("CA123", "elevenlabs_register_succeeded", "registered", "2026-06-27T10:33:04.664Z"),
+            eventRow("CA123", "stream-started", "stream-started", "2026-06-27T10:33:04.771Z"),
+            eventRow("CA123", "stream-stopped", "stream-stopped", "2026-06-27T10:43:04.825Z"),
+            eventRow("CA123", "completed", "completed", "2026-06-27T10:43:05.000Z"),
+          ],
+        }),
+      },
+      {}
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.diagnostics.status, "duration_boundary_candidate");
+    assert.equal(body.diagnostics.ended_near_ten_minute_boundary, true);
+    assert.equal(body.diagnostics.error_event_count, 0);
+    assert.match(body.diagnostics.notes.join(" "), /No application error was logged/);
+  });
 });
+
+function fakeD1({ calls = [], twilio_events: twilioEvents = [] } = {}) {
+  return {
+    prepare(sql) {
+      return {
+        bind(...params) {
+          return {
+            async first() {
+              if (/FROM calls WHERE twilio_call_sid/i.test(sql)) {
+                return calls.find((call) => call.twilio_call_sid === params[0]) || null;
+              }
+              return null;
+            },
+            async all() {
+              if (/FROM twilio_events WHERE twilio_call_sid/i.test(sql)) {
+                return {
+                  results: twilioEvents.filter((event) => event.twilio_call_sid === params[0]),
+                };
+              }
+              return { results: [] };
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+function eventRow(callSid, eventType, callStatus, occurredAt, payload = {}) {
+  return {
+    twilio_call_sid: callSid,
+    event_type: eventType,
+    call_status: callStatus,
+    occurred_at: occurredAt,
+    payload_json: JSON.stringify(payload),
+  };
+}

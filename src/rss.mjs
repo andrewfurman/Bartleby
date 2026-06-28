@@ -8,7 +8,7 @@ const DEFAULT_BOOTSTRAP_LIMIT = 200;
 const DEFAULT_BOOTSTRAP_MAX_CHARS = 60_000;
 const FULL_TEXT_MIN_CHARS = 700;
 const DEFAULT_GREETING_TEMPLATE =
-  "Hey, this is the helpful version of Bartleby. The latest news from The World in Brief as of {published_time} is: {stories}. What would you like to dive into in today's news?";
+  "Here's the latest from The World in Brief as of {published_time}: {stories}. What would you like to dive into?";
 const FALLBACK_GREETING =
   "Hey, this is the helpful version of Bartleby. What would you like to dive into in today's news?";
 
@@ -584,21 +584,8 @@ function greetingText(template, headlines, worldInBrief) {
 function worldInBriefPublishedLabel(item) {
   const date = new Date(item?.published_at || item?.updated_at || "");
   if (Number.isNaN(date.getTime())) return "the latest update";
-  const easternDate = formatDateInZone(date, "America/New_York");
   const easternTime = formatTimeInZone(date, "America/New_York");
-  const gmtDate = formatDateInZone(date, "UTC");
-  const gmtTime = formatTimeInZone(date, "UTC");
-  if (gmtDate !== easternDate) return `${easternDate} at ${easternTime} Eastern, ${gmtDate} at ${gmtTime} GMT`;
-  return `${easternDate} at ${easternTime} Eastern, ${gmtTime} GMT`;
-}
-
-function formatDateInZone(date, timeZone) {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
+  return `${easternTime} Eastern Time`;
 }
 
 function formatTimeInZone(date, timeZone) {

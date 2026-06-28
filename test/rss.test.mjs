@@ -194,7 +194,7 @@ describe("Economist RSS parsing", () => {
     ]);
     assert.equal(
       result.greeting,
-      "Hey, this is the helpful version of Bartleby. The latest news from The World in Brief as of June 24, 2026 at 8 p.m. Eastern, June 25, 2026 at midnight GMT is: Huge earthquakes hit Venezuela, and Apple makes a drastic price hike. What would you like to dive into in today's news?"
+      "Here's the latest from The World in Brief as of 8 p.m. Eastern Time: Huge earthquakes hit Venezuela, and Apple makes a drastic price hike. What would you like to dive into?"
     );
   });
 
