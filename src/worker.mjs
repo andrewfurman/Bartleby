@@ -17,7 +17,7 @@ const XML_HEADERS = {
 };
 
 const OUTSIDE_COVERAGE_MESSAGE =
-  "This number is for Andrew's Bartleby bot and is not available from this caller.";
+  "This number is for Bartleby and is not available from this caller.";
 const DEFAULT_TWILIO_BOOTSTRAP_TIMEOUT_MS = 4500;
 const FALLBACK_STARTUP_GREETING =
   "Hey, this is the helpful version of Bartleby. What would you like to dive into in today's news?";

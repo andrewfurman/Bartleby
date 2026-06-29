@@ -287,7 +287,7 @@ This public repo should contain implementation code, docs, and sanitized example
 - caller allow-list phone numbers
 - local deployment files with secrets
 
-The bot should summarize and discuss articles for the authorized caller. It should not republish full articles or expose subscriber feed data publicly.
+When `ALLOWED_CALLER_NUMBERS` is empty, Bartleby accepts calls from anyone with the phone number. The bot should summarize and discuss articles for callers. It should not republish full articles or expose subscriber feed data publicly.
 
 ## Contribution Workflow
 
