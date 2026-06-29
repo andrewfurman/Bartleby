@@ -10,16 +10,32 @@ const sampleFeed = `<?xml version="1.0"?>
       <title>America tests a new policy</title>
       <link>https://www.economist.com/united-states/2026/06/24/example</link>
       <pubDate>Wed, 24 Jun 2026 12:00:00 GMT</pubDate>
-      <category>The United States</category>
+      <category>United States</category>
       <category>Politics</category>
       <description><![CDATA[An article excerpt about policy.]]></description>
       <content:encoded><![CDATA[<p>Full text about America and policy.</p><p>More context from The Economist.</p>]]></content:encoded>
     </item>
     <item>
-      <title>Markets in brief</title>
+      <title>The US in Brief: A big night in New York</title>
+      <link>https://www.economist.com/in-brief/2026/06/24/the-us-in-brief-a-big-night-in-new-york</link>
+      <pubDate>Wed, 24 Jun 2026 11:21:54 GMT</pubDate>
+      <category>In Brief</category>
+      <category>United States</category>
+      <description><![CDATA[Our daily political update.]]></description>
+      <content:encoded><![CDATA[<p>A full daily political update from The Economist.</p><p>More brief context.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>A new business strategy</title>
       <link>https://www.economist.com/business/2026/06/24/markets</link>
       <pubDate>Wed, 24 Jun 2026 10:00:00 GMT</pubDate>
-      <category>Business and Finance</category>
+      <category>Business</category>
+      <description>Business excerpt.</description>
+    </item>
+    <item>
+      <title>Markets in brief</title>
+      <link>https://www.economist.com/finance-and-economics/2026/06/24/markets</link>
+      <pubDate>Wed, 24 Jun 2026 09:00:00 GMT</pubDate>
+      <category>Finance and Economics</category>
       <description>Market excerpt.</description>
     </item>
   </channel>
@@ -55,6 +71,58 @@ const publicEconomistStyleFeed = `<?xml version="1.0"?>
   </channel>
 </rss>`;
 
+const summaryOnlyPrivateFeed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>The Economist private article feed</title>
+    <item>
+      <title>World in Brief: Huge earthquakes hit Venezuela; Apple makes a drastic price hike</title>
+      <link>https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9</link>
+      <guid isPermaLink="false">world-brief-guid</guid>
+      <pubDate>Thu, 25 Jun 2026 00:00:00 GMT</pubDate>
+      <category>The World in Brief</category>
+      <description>The world in brief preview only...</description>
+    </item>
+  </channel>
+</rss>`;
+
+const fullBriefDescriptionFeed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>The Economist private article feed</title>
+    <item>
+      <title>World in Brief: Huge earthquakes hit Venezuela; Apple makes a drastic price hike</title>
+      <link>https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9</link>
+      <guid isPermaLink="false">world-brief-guid</guid>
+      <pubDate>Thu, 25 Jun 2026 00:00:00 GMT</pubDate>
+      <category>The World in Brief</category>
+      <description>${"Full World in Brief description text. ".repeat(40)}</description>
+    </item>
+  </channel>
+</rss>`;
+
+const worldBriefHeadlineFeed = `<?xml version="1.0"?>
+<rss version="2.0">
+  <channel>
+    <title>The Economist private article feed</title>
+    <item>
+      <title>World in Brief: Huge earthquakes hit Venezuela; Apple makes a drastic price hike</title>
+      <link>https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9</link>
+      <guid isPermaLink="false">world-brief-guid</guid>
+      <pubDate>Thu, 25 Jun 2026 00:00:00 GMT</pubDate>
+      <category>The World in Brief</category>
+      <description>${"Full World in Brief description text. ".repeat(40)}</description>
+    </item>
+    <item>
+      <title>A new business strategy</title>
+      <link>https://www.economist.com/business/2026/06/24/markets</link>
+      <pubDate>Wed, 24 Jun 2026 10:00:00 GMT</pubDate>
+      <category>Business</category>
+      <description>Business excerpt.</description>
+    </item>
+  </channel>
+</rss>`;
+
 describe("Economist RSS parsing", () => {
   it("preserves RSS category tags as sections", () => {
     const parsed = parseFeed(sampleFeed, {
@@ -64,9 +132,11 @@ describe("Economist RSS parsing", () => {
       private: true,
     });
 
-    assert.equal(parsed.items.length, 2);
-    assert.deepEqual(parsed.items[0].categories, ["The United States", "Politics"]);
-    assert.equal(parsed.items[0].section, "The United States");
+    assert.equal(parsed.items.length, 4);
+    assert.deepEqual(parsed.items[0].categories, ["United States", "Politics"]);
+    assert.equal(parsed.items[0].section, "United States");
+    assert.deepEqual(parsed.items[1].categories, ["The US in Brief", "In Brief", "United States"]);
+    assert.equal(parsed.items[1].section, "The US in Brief");
     assert.equal(parsed.feed.feed_url, "https://example.com/feed.xml?token=redacted");
   });
 
@@ -79,12 +149,26 @@ describe("Economist RSS parsing", () => {
 
     assert.equal(parsed.items.length, 3);
     assert.equal(parsed.items[0].title, "The US in Brief: A big night in New York");
-    assert.deepEqual(parsed.items[0].categories, ["The U.S. in Brief", "In Brief"]);
-    assert.equal(parsed.items[0].section, "The U.S. in Brief");
+    assert.deepEqual(parsed.items[0].categories, ["The US in Brief", "In Brief", "United States"]);
+    assert.equal(parsed.items[0].section, "The US in Brief");
     assert.deepEqual(parsed.items[1].categories, ["The World in Brief"]);
     assert.equal(parsed.items[1].section, "The World in Brief");
     assert.deepEqual(parsed.items[2].categories, ["Leaders"]);
     assert.equal(parsed.items[2].section, "Leaders");
+  });
+
+  it("treats long brief descriptions as full text", () => {
+    const parsed = parseFeed(fullBriefDescriptionFeed, {
+      id: "economist",
+      title: "The Economist",
+      url: "https://example.com/feed.xml?token=secret",
+      private: true,
+    });
+
+    assert.equal(parsed.items.length, 1);
+    assert.equal(parsed.items[0].content_source, "feed_description_full_text");
+    assert.equal(parsed.items[0].full_text_available, true);
+    assert.equal(parsed.items[0].reading_time > 0, true);
   });
 
   it("builds startup context with briefs and a bounded recent index", async () => {
@@ -99,6 +183,31 @@ describe("Economist RSS parsing", () => {
     assert.match(result.context_text, /The US in Brief: A big night in New York/);
   });
 
+  it("builds a short greeting from the top two World in Brief headlines", async () => {
+    const env = feedEnv(worldBriefHeadlineFeed);
+    const result = await economistBootstrap(env, { limit: 2, refresh: true });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.world_in_brief_headlines, [
+      "Huge earthquakes hit Venezuela",
+      "Apple makes a drastic price hike",
+    ]);
+    assert.equal(
+      result.greeting,
+      "Here's the latest from The World in Brief as of 8 p.m. Eastern Time: Huge earthquakes hit Venezuela, and Apple makes a drastic price hike. What would you like to dive into?"
+    );
+  });
+
+  it("sends bearer auth when configured for a private RSS feed", async () => {
+    const env = {
+      ...feedEnv(sampleFeed),
+      ECONOMIST_RSS_BEARER_TOKEN: "private-feed-token",
+    };
+    await economistSections(env, { refresh: true });
+
+    assert.equal(globalThis.__lastFetchOptions.headers.authorization, "Bearer private-feed-token");
+  });
+
   it("filters by section and query", async () => {
     const env = feedEnv(sampleFeed);
     const result = await economistSearch(env, {
@@ -111,6 +220,64 @@ describe("Economist RSS parsing", () => {
     assert.equal(result.ok, true);
     assert.equal(result.returned_count, 1);
     assert.equal(result.items[0].title, "America tests a new policy");
+    assert.match(globalThis.__lastFetchUrl, /[?&]category=United\+States(?:&|$)/);
+  });
+
+  it("keeps The US in Brief separate from the United States section", async () => {
+    const env = feedEnv(sampleFeed);
+    const unitedStates = await economistSearch(env, {
+      section: "United States",
+      limit: 10,
+      refresh: true,
+    });
+    const usInBrief = await economistSearch(env, {
+      section: "US in Brief",
+      limit: 10,
+      refresh: true,
+    });
+
+    const url = new URL(globalThis.__lastFetchUrl);
+
+    assert.equal(unitedStates.ok, true);
+    assert.deepEqual(
+      unitedStates.items.map((item) => item.title),
+      ["America tests a new policy"]
+    );
+    assert.equal(usInBrief.ok, true);
+    assert.deepEqual(
+      usInBrief.items.map((item) => item.title),
+      ["The US in Brief: A big night in New York"]
+    );
+    assert.deepEqual(url.searchParams.getAll("category"), ["In Brief"]);
+  });
+
+  it("keeps Business separate from Finance and Economics", async () => {
+    const env = feedEnv(sampleFeed);
+    const business = await economistSearch(env, {
+      section: "Business",
+      limit: 5,
+      refresh: true,
+    });
+    const businessUrl = new URL(globalThis.__lastFetchUrl);
+    const finance = await economistSearch(env, {
+      section: "Finance and Economics",
+      limit: 5,
+      refresh: true,
+    });
+    const financeUrl = new URL(globalThis.__lastFetchUrl);
+
+    assert.equal(business.ok, true);
+    assert.deepEqual(
+      business.items.map((item) => item.title),
+      ["A new business strategy"]
+    );
+    assert.deepEqual(businessUrl.searchParams.getAll("category"), ["Business"]);
+    assert.equal(finance.ok, true);
+    assert.deepEqual(
+      finance.items.map((item) => item.title),
+      ["Markets in brief"]
+    );
+    assert.deepEqual(financeUrl.searchParams.getAll("category"), ["Finance and Economics"]);
   });
 
   it("lists sections by category counts", async () => {
@@ -120,7 +287,7 @@ describe("Economist RSS parsing", () => {
     assert.equal(result.ok, true);
     assert.deepEqual(
       result.sections.map((section) => section.section).sort(),
-      ["Business and Finance", "Politics", "The United States"].sort()
+      ["Business", "Finance and Economics", "In Brief", "Politics", "The US in Brief", "United States"].sort()
     );
   });
 
@@ -135,10 +302,36 @@ describe("Economist RSS parsing", () => {
     assert.equal(article.ok, true);
     assert.match(article.full_text, /Full text about America/);
   });
+
+  it("uses the private article.txt endpoint when RSS only has a preview", async () => {
+    const fullText = "The world in brief\n\n" + "Full cached World in Brief text from the article endpoint. ".repeat(30);
+    const articleUrl = "https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9";
+    const env = feedEnv(summaryOnlyPrivateFeed, {
+      articleTextByUrl: {
+        [articleUrl]: fullText,
+      },
+    });
+    const article = await economistArticle(env, {
+      article_url: articleUrl,
+      refresh: true,
+    });
+    const articleTextUrl = new URL(globalThis.__lastArticleTextFetchUrl);
+
+    assert.equal(article.ok, true);
+    assert.equal(article.content_source, "article_txt");
+    assert.equal(article.article_text_status, "ok");
+    assert.equal(article.full_article_available, true);
+    assert.match(article.full_text, /Full cached World in Brief text/);
+    assert.equal(articleTextUrl.pathname, "/article.txt");
+    assert.equal(articleTextUrl.searchParams.get("token"), "secret");
+    assert.equal(articleTextUrl.searchParams.get("url"), articleUrl);
+  });
 });
 
-function feedEnv(xml) {
+function feedEnv(xml, { articleTextByUrl = {} } = {}) {
   globalThis.__testFeedXml = xml;
+  globalThis.__articleTextByUrl = articleTextByUrl;
+  globalThis.__lastArticleTextFetchUrl = "";
   return {
     ECONOMIST_RSS_URL: "https://example.com/feed.xml?token=secret",
     ECONOMIST_RSS_CACHE_SECONDS: "900",
@@ -147,8 +340,23 @@ function feedEnv(xml) {
   };
 }
 
-globalThis.fetch = async () =>
-  new Response(globalThis.__testFeedXml || sampleFeed, {
+globalThis.fetch = async (_url, options = {}) => {
+  globalThis.__lastFetchUrl = String(_url);
+  globalThis.__lastFetchOptions = options;
+  const url = new URL(String(_url));
+  if (url.pathname === "/article.txt") {
+    globalThis.__lastArticleTextFetchUrl = String(_url);
+    const articleText = globalThis.__articleTextByUrl?.[url.searchParams.get("url") || ""];
+    if (!articleText) {
+      return new Response("Article text not found", { status: 404 });
+    }
+    return new Response(articleText, {
+      status: 200,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+  return new Response(globalThis.__testFeedXml || sampleFeed, {
     status: 200,
     headers: { "content-type": "application/rss+xml" },
   });
+};

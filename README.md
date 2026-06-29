@@ -6,7 +6,7 @@ Bartleby is a phone-callable ElevenLabs voice agent for talking through recent a
 
 Anyone can try Bartleby by calling **+1 959-991-1122**. Ask what is new in *The Economist*, request the latest World in Brief headlines, or dive into a specific section such as United States, Business, Finance and Economics, Culture, Leaders, or Obituary.
 
-This repository is intentionally standalone. It is modeled on the operating pattern of Andrew Furman's Phone Claw project, but it should not depend on Phone Claw code, configuration, deployment state, or the separate Economist newspaper RSS feed repository.
+This repository is intentionally standalone. It is modeled on the operating pattern of Andrew Furman's Phone Claw project, but it should not depend on Phone Claw code, configuration, or deployment state. Bartleby can consume Andrew's separate private Economist RSS server as a configured RSS source, but it should not import or duplicate that repository's subscriber-login/browser-fetch code.
 
 Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 
@@ -14,7 +14,7 @@ Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 
 - Call a phone number and talk to an ElevenLabs Conversational AI agent named Bartleby.
 - Ask for the latest items across the feed, or narrow by *The Economist* section.
-- Use RSS `category` tags as first-class section metadata when present, including sections such as `The World in Brief`, `The U.S. in Brief`, `Leaders`, `The United States`, `Business and Finance`, `Culture`, and `Obituary`.
+- Use RSS `category` tags as first-class section metadata when present, including sections such as `The World in Brief`, `The US in Brief`, `Leaders`, `United States`, `Business`, `Finance and Economics`, `Culture`, and `Obituary`.
 - Fall back to conservative Economist URL/title section inference when public feeds omit category tags.
 - Preload startup context for each call: latest U.S. in Brief if present, latest World in Brief if present, and up to 200 recent Economist RSS articles.
 - Retrieve article text from the configured RSS feed when the feed provides it.
@@ -67,8 +67,11 @@ The ElevenLabs agent should have a small, explicit tool set:
 | `economist_article` | Retrieve the full text or longest available RSS text for a specific entry. |
 | `economist_bootstrap` | Build startup context with the latest briefs and recent-article index. Used by the Twilio inbound webhook before the first agent turn. |
 | `web_search` | Look up external background only when the caller asks for non-Economist context or the RSS feed clearly does not contain the answer. |
+| `hang_up` | End the current Twilio call only after the caller clearly says goodbye or explicitly asks to hang up. |
 
 Tool responses should include stable entry IDs, title, URL, author when available, published date, section/category list, excerpt, and a short `answer_text` field that is safe for the voice agent to read aloud.
+
+The private RSS feed is now a lightweight article index for most stories. `economist_article` uses that index to find the item, then calls the feed server's authenticated `/article.txt` companion endpoint for cached plain text when RSS only has a preview.
 
 The agent should never use `web_search` merely because a question is current, broad, or complicated. It should first check the Economist RSS tools, answer from those articles when possible, and only then use search if the user requested outside information or the RSS result establishes a real gap.
 
@@ -98,6 +101,19 @@ The Worker uses D1 for structured text logs only. It does not store audio blobs 
 ## RSS Feed Expectations
 
 Bartleby should support one or more configured Economist RSS or Atom feeds. The real feed URL should be configured through environment variables or a host-local secret file, not committed.
+
+For the best Economist coverage, point Bartleby at Andrew's private `economist-newspaper-rss-feed` server instead of the public Economist RSS feed. That service combines the public latest and section feeds, adds full-text subscriber article bodies when available, emits RSS `<category>` tags, and includes special authenticated handling for `The World in Brief`, which is not exposed as a normal dated item in the public RSS feeds.
+
+Bartleby uses the private RSS server's category-filtering extension for section queries. Calls such as `economist_recent` or `economist_search` with `section: "United States"` fetch the feed with `category=United%20States`, then apply a local category fallback. Bartleby treats `The US in Brief` as separate from the standard `United States` section, even though the private feed tags U.S. brief entries with `United States` for RSS-reader discovery. It also keeps `Business` separate from `Finance and Economics`. This supports sections such as `Culture`, `Business`, `Finance and Economics`, `Leaders`, `Britain`, `Europe`, and `The World in Brief`.
+
+Configure the private feed as:
+
+```bash
+ECONOMIST_RSS_URL=https://private.example.com/rss.xml
+ECONOMIST_RSS_BEARER_TOKEN=replace-with-economist-feed-token
+```
+
+The private RSS server also supports `?token=...`, but `ECONOMIST_RSS_BEARER_TOKEN` keeps the token out of URLs and logs.
 
 Example private config shape:
 
@@ -134,11 +150,17 @@ If the feed only includes an excerpt, Bartleby should say that clearly instead o
 Bartleby should answer like an informed, concise reading companion:
 
 - Prefer *The Economist* RSS feed over web search.
+- Start calls with the dynamic `bartleby_greeting`, which gives the latest World in Brief update time in Eastern Time and includes two quick headlines when available.
 - Mention the article title and section when grounding an answer.
 - Distinguish what the article says from outside context.
 - Use web search only when the caller explicitly asks for outside information, newer developments beyond an article, background on a person/place/company not explained in the article, or when RSS tools return no relevant Economist material.
 - Before using web search, try `economist_recent`, `economist_search`, or `economist_article` unless the caller has clearly asked for sources beyond *The Economist*.
+- If the caller explicitly asks to search the web, use outside web context, or find information outside *The Economist*, call `web_search` before answering.
+- Treat "web search", "outside web context", "outside The Economist", and "use the web search tool" as explicit external-search requests; do not name an outside source until `web_search` has returned results.
 - When web search is used, state that the added context comes from outside *The Economist*.
+- When the caller asks for more detail about a listed article, call `economist_article` immediately instead of asking whether to retrieve the full text. Do this before saying full text is unavailable.
+- Do not hang up on ambiguous politeness such as "thanks" or "okay"; ask for confirmation first.
+- If the caller clearly says goodbye or explicitly asks to hang up, disconnect, or end the call, say a brief goodbye and call `hang_up`.
 - Say when the feed has no matching article or when only an excerpt is available.
 - Keep spoken answers compact, then offer to go deeper.
 
@@ -155,11 +177,13 @@ ELEVENLABS_API_KEY=
 ELEVENLABS_AGENT_ID=
 ELEVENLABS_API_BASE=https://api.elevenlabs.io
 ELEVENLABS_TELEPHONY_AUDIO_FORMAT=ulaw_8000
+ELEVENLABS_VOICE_ID=onwK4e9ZLuTAKqWW03F9
+ELEVENLABS_FIRST_MESSAGE={{bartleby_greeting}}
 ELEVENLABS_POST_CALL_WEBHOOK_ID=
 ELEVENLABS_POST_CALL_TOKEN=
 ELEVENLABS_WEBHOOK_SECRET=
 
-TWILIO_PHONE_NUMBER=
+TWILIO_PHONE_NUMBER=+19599911122
 TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
 TWILIO_API_KEY_SID=
@@ -168,16 +192,22 @@ TWILIO_WEBHOOK_TOKEN=
 ALLOWED_CALLER_NUMBERS=
 
 ECONOMIST_RSS_URL=
+ECONOMIST_RSS_BEARER_TOKEN=
 ECONOMIST_RSS_CACHE_SECONDS=900
-ECONOMIST_RSS_TIMEOUT_MS=12000
+ECONOMIST_RSS_TIMEOUT_MS=25000
 BARTLEBY_BOOTSTRAP_ARTICLE_LIMIT=200
 BARTLEBY_BOOTSTRAP_MAX_CHARS=60000
+BARTLEBY_TWILIO_BOOTSTRAP_TIMEOUT_MS=4500
+BARTLEBY_GREETING_TEMPLATE=Here's the latest from The World in Brief as of {published_time}: {stories}. What would you like to dive into?
 
 WEB_SEARCH_PROVIDER=auto
 TAVILY_API_KEY=
+TAVILY_SEARCH_DEPTH=basic
 ```
 
-Do not commit `.env`, provider secrets, real phone numbers, subscriber RSS URLs, API keys, cookies, browser profiles, or exported configs that contain live operational identifiers.
+The default `ELEVENLABS_VOICE_ID` is ElevenLabs' Daniel voice, a British male broadcaster-style voice. Override it with another available ElevenLabs voice ID if desired.
+
+Do not commit `.env`, provider secrets, private caller numbers, subscriber RSS URLs, API keys, cookies, browser profiles, or exported configs that contain live operational identifiers.
 
 ## Local Commands
 
@@ -240,7 +270,8 @@ The smoke test verifies deployed health, optionally checks the Economist tool, i
 8. Run a live conversation smoke test:
    - "What is new in The World in Brief?"
    - "What are the latest U.S. stories?"
-   - "Find recent Business and Finance pieces about AI."
+   - "Find recent Business pieces about AI."
+   - "Find recent Finance and Economics pieces about markets."
    - "Tell me more about the second article."
    - "Search the web for background on that topic."
 
@@ -256,7 +287,7 @@ This public repo should contain implementation code, docs, and sanitized example
 - caller allow-list phone numbers
 - local deployment files with secrets
 
-The bot should summarize and discuss articles for the authorized caller. It should not republish full articles or expose subscriber feed data publicly.
+When `ALLOWED_CALLER_NUMBERS` is empty, Bartleby accepts calls from anyone with the phone number. The bot should summarize and discuss articles for callers. It should not republish full articles or expose subscriber feed data publicly.
 
 ## Contribution Workflow
 

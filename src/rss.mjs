@@ -1,11 +1,16 @@
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 200;
 const DEFAULT_CACHE_SECONDS = 900;
-const DEFAULT_TIMEOUT_MS = 12_000;
+const DEFAULT_TIMEOUT_MS = 25_000;
 const DEFAULT_EXCERPT_CHARS = 420;
 const DEFAULT_MAX_TEXT_CHARS = 60_000;
 const DEFAULT_BOOTSTRAP_LIMIT = 200;
 const DEFAULT_BOOTSTRAP_MAX_CHARS = 60_000;
+const FULL_TEXT_MIN_CHARS = 700;
+const DEFAULT_GREETING_TEMPLATE =
+  "Here's the latest from The World in Brief as of {published_time}: {stories}. What would you like to dive into?";
+const FALLBACK_GREETING =
+  "Hey, this is the helpful version of Bartleby. What would you like to dive into in today's news?";
 
 let feedCache = null;
 
@@ -49,26 +54,26 @@ export async function economistSearch(
   {
     query = "",
     section = "",
+    category = "",
+    categories = [],
     start_date: startDate = "",
     end_date: endDate = "",
     limit = DEFAULT_LIMIT,
     refresh = false,
   } = {}
 ) {
-  const result = await loadEconomistFeed(env, { refresh });
+  const normalizedQuery = normalize(query).toLowerCase();
+  const requestedSections = sectionFilters({ section, category, categories });
+  const result = await loadEconomistFeed(env, { refresh, categories: requestedSections });
   if (!result.ok) return result;
 
-  const normalizedQuery = normalize(query).toLowerCase();
-  const normalizedSection = normalize(section).toLowerCase();
   const after = dateSeconds(startDate);
   const before = dateSeconds(endDate);
   const boundedLimit = clampInteger(limit, 1, MAX_LIMIT, DEFAULT_LIMIT);
 
   const filteredItems = result.items.filter((item) => {
-    if (normalizedSection) {
-      const inSection = item.categories.some((category) =>
-        category.toLowerCase().includes(normalizedSection)
-      );
+    if (requestedSections.length) {
+      const inSection = requestedSections.some((requestedSection) => itemMatchesSection(item, requestedSection));
       if (!inSection) return false;
     }
 
@@ -103,14 +108,15 @@ export async function economistSearch(
     provider: "economist_rss",
     source: result.feed.id,
     query: normalize(query),
-    section: normalize(section),
+    section: requestedSections.join(", "),
+    categories: requestedSections,
     start_date: normalize(startDate),
     end_date: normalize(endDate),
     returned_count: items.length,
     total_count: filteredItems.length,
     feed: result.feed,
     items,
-    answer_text: entriesAnswerText(items, { query, section }),
+    answer_text: entriesAnswerText(items, { query, section: requestedSections.join(", ") }),
   };
 }
 
@@ -136,6 +142,8 @@ export async function economistBootstrap(env, options = {}) {
     .map((item) => bootstrapEntry(item));
   const usInBrief = latestBriefEntry(result.items, "us");
   const worldInBrief = latestBriefEntry(result.items, "world");
+  const worldInBriefHeadlines = worldInBrief ? worldBriefHeadlines(worldInBrief) : [];
+  const worldInBriefPublishedTime = worldInBriefPublishedLabel(worldInBrief);
   const contextText = truncate(bootstrapContextText(result, recentArticles, usInBrief, worldInBrief), maxChars);
 
   return {
@@ -148,6 +156,9 @@ export async function economistBootstrap(env, options = {}) {
     recent_article_count: recentArticles.length,
     us_in_brief: usInBrief ? bootstrapEntry(usInBrief, { excerptChars: 900 }) : null,
     world_in_brief: worldInBrief ? bootstrapEntry(worldInBrief, { excerptChars: 900 }) : null,
+    world_in_brief_headlines: worldInBriefHeadlines,
+    world_in_brief_published_time: worldInBriefPublishedTime,
+    greeting: greetingText(env.BARTLEBY_GREETING_TEMPLATE, worldInBriefHeadlines, worldInBrief),
     recent_articles: recentArticles,
     context_text: contextText.value,
     context_truncated: contextText.truncated,
@@ -191,9 +202,16 @@ export async function economistArticle(
   }
 
   const boundedMax = clampInteger(maxTextChars, 2_000, 120_000, DEFAULT_MAX_TEXT_CHARS);
-  const text = normalizeArticleText(item.full_text || item.summary || "");
+  const rssText = normalizeArticleText(item.full_text || item.summary || "");
+  const articleTextResult = await fetchArticleText(env, item);
+  const articleText = articleTextResult.ok ? articleTextResult.text : "";
+  const text = articleText.length > rssText.length ? articleText : rssText;
+  const contentSource = articleText.length > rssText.length ? "article_txt" : item.content_source;
   const truncated = truncate(text, boundedMax);
-  const fullArticleAvailable = text.length >= 700 && item.content_source !== "feed_summary";
+  const fullArticleAvailable =
+    text.length >= FULL_TEXT_MIN_CHARS && (contentSource !== "feed_summary" || isBriefEntry(item));
+  const retrievalSource =
+    contentSource === "article_txt" ? "The Economist article text endpoint" : "The Economist RSS feed";
 
   return {
     ok: true,
@@ -203,23 +221,26 @@ export async function economistArticle(
     entry: compactEntry(item, { excerptChars: 700 }),
     entry_id: item.id,
     full_article_available: fullArticleAvailable,
-    content_source: item.content_source,
+    content_source: contentSource,
+    article_text_status: articleTextResult.status,
     full_text_chars: text.length,
     returned_text_chars: truncated.value.length,
     full_text_truncated: truncated.truncated,
     access_note:
       fullArticleAvailable || text.length >= 700
         ? ""
-        : "The RSS feed appears to provide only an excerpt for this article.",
+        : articleTextResult.status === "article_text_not_found"
+          ? "The RSS feed and article text endpoint only provide an excerpt for this article."
+          : "The RSS feed appears to provide only an excerpt for this article.",
     full_text: truncated.value,
     answer_text: fullArticleAvailable
-      ? `Retrieved "${item.title}" from The Economist RSS feed.`
+      ? `Retrieved "${item.title}" from ${retrievalSource}.`
       : `Retrieved "${item.title}", but the RSS feed may only include an excerpt.`,
   };
 }
 
-export async function loadEconomistFeed(env, { refresh = false } = {}) {
-  const config = economistFeedConfig(env);
+export async function loadEconomistFeed(env, { refresh = false, categories = [] } = {}) {
+  const config = economistFeedConfig(env, { categories });
   if (!config.url) {
     return {
       ok: false,
@@ -247,6 +268,7 @@ export async function loadEconomistFeed(env, { refresh = false } = {}) {
       headers: {
         accept: "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8",
         "user-agent": "bartleby-economist-rss/0.1",
+        ...(config.bearerToken ? { authorization: `Bearer ${config.bearerToken}` } : {}),
       },
     });
     const xml = await response.text();
@@ -325,11 +347,12 @@ function rssItem(block, feed) {
   const title = tagText(block, "title");
   const url = normalize(tagText(block, "link") || tagText(block, "guid"));
   const explicitCategories = tagTexts(block, "category").filter(Boolean);
-  const categories = explicitCategories.length ? explicitCategories : inferredEconomistCategories({ title, url });
+  const categories = itemCategories(explicitCategories, { title, url });
   const contentHtml = tagText(block, "content:encoded") || tagText(block, "encoded");
   const summaryHtml = tagText(block, "description") || tagText(block, "summary");
   const fullText = normalizeArticleText(htmlToText(contentHtml || summaryHtml));
   const summary = normalizeArticleText(htmlToText(summaryHtml || contentHtml));
+  const fullDescriptionText = isFullBriefDescription({ title, url, categories, text: fullText });
   const publishedAt = normalizeDate(
     tagText(block, "pubDate") || tagText(block, "published") || tagText(block, "dc:date")
   );
@@ -346,10 +369,10 @@ function rssItem(block, feed) {
     section: categories[0] || "",
     published_at: publishedAt,
     updated_at: updatedAt,
-    content_source: contentHtml ? "feed_content_encoded" : "feed_summary",
+    content_source: contentHtml ? "feed_content_encoded" : fullDescriptionText ? "feed_description_full_text" : "feed_summary",
     full_text: fullText,
     summary,
-    full_text_available: contentHtml ? fullText.length >= 700 : false,
+    full_text_available: contentHtml ? fullText.length >= FULL_TEXT_MIN_CHARS : fullDescriptionText,
     reading_time: readingTime(fullText),
   };
 }
@@ -358,11 +381,12 @@ function atomItem(block, feed) {
   const title = tagText(block, "title");
   const url = atomLink(block) || tagText(block, "id");
   const explicitCategories = atomCategories(block);
-  const categories = explicitCategories.length ? explicitCategories : inferredEconomistCategories({ title, url });
+  const categories = itemCategories(explicitCategories, { title, url });
   const contentHtml = tagText(block, "content");
   const summaryHtml = tagText(block, "summary");
   const fullText = normalizeArticleText(htmlToText(contentHtml || summaryHtml));
   const summary = normalizeArticleText(htmlToText(summaryHtml || contentHtml));
+  const fullDescriptionText = isFullBriefDescription({ title, url, categories, text: fullText });
   const publishedAt = normalizeDate(tagText(block, "published"));
   const updatedAt = normalizeDate(tagText(block, "updated"));
 
@@ -377,22 +401,22 @@ function atomItem(block, feed) {
     section: categories[0] || "",
     published_at: publishedAt || updatedAt,
     updated_at: updatedAt,
-    content_source: contentHtml ? "feed_content" : "feed_summary",
+    content_source: contentHtml ? "feed_content" : fullDescriptionText ? "feed_description_full_text" : "feed_summary",
     full_text: fullText,
     summary,
-    full_text_available: contentHtml ? fullText.length >= 700 : false,
+    full_text_available: contentHtml ? fullText.length >= FULL_TEXT_MIN_CHARS : fullDescriptionText,
     reading_time: readingTime(fullText),
   };
 }
 
-function economistFeedConfig(env) {
+function economistFeedConfig(env, options = {}) {
   const json = normalize(env.ECONOMIST_RSS_CONFIG_JSON);
   if (json) {
     try {
       const parsed = JSON.parse(json);
       const feed = Array.isArray(parsed?.feeds) ? parsed.feeds[0] : Array.isArray(parsed) ? parsed[0] : parsed;
       if (feed?.url) {
-        return normalizeFeedConfig(feed, env);
+        return normalizeFeedConfig(feed, env, options);
       }
     } catch {
       // Fall through to the simple env var config.
@@ -407,13 +431,17 @@ function economistFeedConfig(env) {
       private: true,
       cache_seconds: env.ECONOMIST_RSS_CACHE_SECONDS,
       timeout_ms: env.ECONOMIST_RSS_TIMEOUT_MS,
+      bearer_token: env.ECONOMIST_RSS_BEARER_TOKEN || env.ECONOMIST_RSS_AUTH_TOKEN,
     },
-    env
+    env,
+    options
   );
 }
 
-function normalizeFeedConfig(feed, env) {
-  const url = normalize(feed.url || feed.feed_url || feed.feedUrl);
+function normalizeFeedConfig(feed, env, { categories = [] } = {}) {
+  const baseUrl = normalize(feed.url || feed.feed_url || feed.feedUrl);
+  const categoryFilters = sectionFilters({ categories });
+  const url = categoryFilters.length ? categoryFilterUrl(baseUrl, categoryFilters) : baseUrl;
   const cacheSeconds = clampInteger(
     feed.cache_seconds || feed.cacheSeconds || env.ECONOMIST_RSS_CACHE_SECONDS,
     0,
@@ -426,6 +454,16 @@ function normalizeFeedConfig(feed, env) {
     60_000,
     DEFAULT_TIMEOUT_MS
   );
+  const bearerToken = normalize(
+    feed.bearer_token ||
+      feed.bearerToken ||
+      feed.auth_token ||
+      feed.authToken ||
+      (feed.auth_token_env ? env[feed.auth_token_env] : "") ||
+      (feed.authTokenEnv ? env[feed.authTokenEnv] : "") ||
+      env.ECONOMIST_RSS_BEARER_TOKEN ||
+      env.ECONOMIST_RSS_AUTH_TOKEN
+  );
 
   return {
     id: normalizeFeedId(feed.id || "economist"),
@@ -434,7 +472,9 @@ function normalizeFeedConfig(feed, env) {
     private: toBoolean(feed.private, true),
     cacheSeconds,
     timeoutMs,
-    cacheKey: `${url}|${cacheSeconds}`,
+    bearerToken,
+    categoryFilters,
+    cacheKey: `${url}|${cacheSeconds}|${Boolean(bearerToken)}|${categoryFilters.join(",")}`,
   };
 }
 
@@ -467,6 +507,7 @@ function bootstrapEntry(item, { excerptChars = 220 } = {}) {
     categories: item.categories,
     content_source: item.content_source,
     full_text_available: item.full_text_available,
+    reading_time: item.reading_time,
     excerpt: truncate(item.summary || item.full_text || "", excerptChars).value,
   };
 }
@@ -477,7 +518,11 @@ function latestBriefEntry(items, kind) {
 }
 
 function isUsInBrief(item) {
-  return item.categories.includes("The U.S. in Brief") || /^(the )?(us|u\.s\.|united states) in brief\b/i.test(item.title);
+  return (
+    item.categories.includes("The US in Brief") ||
+    item.categories.includes("The U.S. in Brief") ||
+    /^(the )?(us|u\.s\.|united states) in brief\b/i.test(item.title)
+  );
 }
 
 function isWorldInBrief(item) {
@@ -486,6 +531,147 @@ function isWorldInBrief(item) {
     /^(the )?world in brief\b/i.test(item.title) ||
     /\/the-world-in-brief\//i.test(item.url)
   );
+}
+
+function isBriefEntry(item) {
+  return isUsInBrief(item) || isWorldInBrief(item);
+}
+
+function worldBriefHeadlines(item) {
+  const titleText = normalize(item.title).replace(/^(the )?world in brief:\s*/i, "");
+  const titleParts = titleText
+    .split(/\s*;\s*/)
+    .map((part) => truncateHeadline(part))
+    .filter(Boolean);
+  if (titleParts.length >= 2) return titleParts.slice(0, 2);
+
+  const textParts = sentenceHeadlines(item.summary || item.full_text || "");
+  return uniqueStrings([...titleParts, ...textParts]).slice(0, 2);
+}
+
+function sentenceHeadlines(text) {
+  return normalizeArticleText(text)
+    .replace(/^(the )?world in brief\b/i, "")
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => truncateHeadline(part))
+    .filter((part) => part && !/^\d+\s+of\s+\d+\b/i.test(part))
+    .slice(0, 4);
+}
+
+function truncateHeadline(value) {
+  const text = normalize(value)
+    .replace(/^\d+\s+of\s+\d+\s*/i, "")
+    .replace(/^\(?updated\b.*?\)\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return truncate(text, 160).value;
+}
+
+function greetingText(template, headlines, worldInBrief) {
+  const story1 = normalize(headlines?.[0]);
+  const story2 = normalize(headlines?.[1]);
+  if (!story1) return FALLBACK_GREETING;
+  const stories = story2 ? `${story1}, and ${story2}` : story1;
+  const publishedTime = worldInBriefPublishedLabel(worldInBrief);
+  return normalize(template || DEFAULT_GREETING_TEMPLATE)
+    .replace(/\{story_1\}/g, story1)
+    .replace(/\{story_2\}/g, story2)
+    .replace(/\{stories\}/g, stories)
+    .replace(/\{published_time\}/g, publishedTime)
+    .replace(/\{published_at\}/g, normalize(worldInBrief?.published_at || worldInBrief?.updated_at));
+}
+
+function worldInBriefPublishedLabel(item) {
+  const date = new Date(item?.published_at || item?.updated_at || "");
+  if (Number.isNaN(date.getTime())) return "the latest update";
+  const easternTime = formatTimeInZone(date, "America/New_York");
+  return `${easternTime} Eastern Time`;
+}
+
+function formatTimeInZone(date, timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value])
+  );
+  if (parts.hour === "12" && parts.minute === "00" && parts.dayPeriod?.toLowerCase() === "am") return "midnight";
+  if (parts.hour === "12" && parts.minute === "00" && parts.dayPeriod?.toLowerCase() === "pm") return "noon";
+  const minute = parts.minute === "00" ? "" : `:${parts.minute}`;
+  const period = parts.dayPeriod?.toLowerCase() === "am" ? "a.m." : "p.m.";
+  return `${parts.hour}${minute} ${period}`;
+}
+
+function isFullBriefDescription({ title = "", url = "", categories = [], text = "" }) {
+  if (normalizeArticleText(text).length < FULL_TEXT_MIN_CHARS) return false;
+  return isBriefEntry({ title, url, categories });
+}
+
+async function fetchArticleText(env, item) {
+  if (!item?.url) {
+    return { ok: false, status: "article_text_no_url", text: "" };
+  }
+
+  const config = economistFeedConfig(env);
+  const url = articleTextEndpointUrl(config, item);
+  if (!url) {
+    return { ok: false, status: "article_text_endpoint_not_configured", text: "" };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        accept: "text/plain;q=1.0, text/*;q=0.9",
+        "user-agent": "bartleby-economist-rss/0.1",
+        ...(config.bearerToken ? { authorization: `Bearer ${config.bearerToken}` } : {}),
+      },
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status === 404 ? "article_text_not_found" : "article_text_request_failed",
+        upstream_status: response.status,
+        text: "",
+      };
+    }
+
+    const text = normalizeArticleText(body);
+    return text
+      ? { ok: true, status: "ok", text }
+      : { ok: false, status: "article_text_empty", text: "" };
+  } catch (error) {
+    return {
+      ok: false,
+      status: error?.name === "AbortError" ? "article_text_timeout" : "article_text_request_failed",
+      message: error?.message || String(error),
+      text: "",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function articleTextEndpointUrl(config, item) {
+  try {
+    const feedUrl = new URL(config.url);
+    const url = new URL("/article.txt", feedUrl.origin);
+    for (const token of feedUrl.searchParams.getAll("token")) {
+      url.searchParams.append("token", token);
+    }
+    url.searchParams.set("url", item.url);
+    return url.toString();
+  } catch {
+    return "";
+  }
 }
 
 function bootstrapContextText(result, recentArticles, usInBrief, worldInBrief) {
@@ -512,8 +698,15 @@ function bootstrapContextText(result, recentArticles, usInBrief, worldInBrief) {
 function articleContextLine(item) {
   const published = item.published_at ? item.published_at.slice(0, 10) : "undated";
   const section = item.section || "Unsectioned";
+  const fullText =
+    item.full_text_available === true
+      ? " Full text: available in RSS."
+      : item.full_text_available === false
+        ? " Full text: excerpt/summary only in RSS."
+        : "";
+  const readingTime = item.reading_time ? ` Reading time: ${item.reading_time} min.` : "";
   const excerpt = item.excerpt ? ` Excerpt: ${item.excerpt}` : "";
-  return `[${published}] ${item.title} (${section}) ${item.url}.${excerpt}`;
+  return `[${published}] ${item.title} (${section}) ${item.url}.${fullText}${readingTime}${excerpt}`;
 }
 
 function entriesAnswerText(items, { query, section }) {
@@ -577,10 +770,14 @@ function atomCategories(block) {
   return categories;
 }
 
+function itemCategories(explicitCategories, { title, url }) {
+  const briefSections = inferredBriefSections(title);
+  if (!explicitCategories.length) return inferredEconomistCategories({ title, url });
+  return uniqueStrings([...briefSections, ...explicitCategories]);
+}
+
 function inferredEconomistCategories({ title, url }) {
-  const categories = [];
-  const briefSection = inferredBriefSection(title);
-  if (briefSection) categories.push(briefSection);
+  const categories = inferredBriefSections(title);
 
   const pathSection = inferredPathSection(url);
   if (pathSection && !categories.includes(pathSection)) categories.push(pathSection);
@@ -588,11 +785,13 @@ function inferredEconomistCategories({ title, url }) {
   return categories;
 }
 
-function inferredBriefSection(title) {
+function inferredBriefSections(title) {
   const normalizedTitle = normalize(title).toLowerCase();
-  if (/^(the )?(us|u\.s\.|united states) in brief\b/.test(normalizedTitle)) return "The U.S. in Brief";
-  if (/^(the )?world in brief\b/.test(normalizedTitle)) return "The World in Brief";
-  return "";
+  if (/^(the )?(us|u\.s\.|united states) in brief\b/.test(normalizedTitle)) {
+    return ["The US in Brief", "In Brief", "United States"];
+  }
+  if (/^(the )?world in brief\b/.test(normalizedTitle)) return ["The World in Brief"];
+  return [];
 }
 
 function inferredPathSection(value) {
@@ -608,16 +807,16 @@ function inferredPathSection(value) {
     "in-brief": "In Brief",
     leaders: "Leaders",
     "by-invitation": "By Invitation",
-    "united-states": "The United States",
+    "united-states": "United States",
     britain: "Britain",
     europe: "Europe",
     americas: "The Americas",
     asia: "Asia",
     china: "China",
-    "middle-east-and-africa": "Middle East & Africa",
+    "middle-east-and-africa": "Middle East and Africa",
     business: "Business",
-    "finance-and-economics": "Finance & Economics",
-    "science-and-technology": "Science & Technology",
+    "finance-and-economics": "Finance and Economics",
+    "science-and-technology": "Science and Technology",
     culture: "Culture",
     obituary: "Obituary",
     "graphic-detail": "Graphic Detail",
@@ -729,6 +928,116 @@ function canonicalUrl(value) {
   }
 }
 
+function sectionFilters({ section = "", category = "", categories = [] } = {}) {
+  const rawValues = [
+    section,
+    category,
+    ...(Array.isArray(categories) ? categories : [categories]),
+  ];
+  const filters = [];
+  for (const value of rawValues) {
+    for (const part of String(value || "").split(",")) {
+      const expanded = expandSectionAlias(part);
+      for (const item of expanded) {
+        if (item && !filters.includes(item)) filters.push(item);
+      }
+    }
+  }
+  return filters;
+}
+
+function expandSectionAlias(value) {
+  const text = normalize(value);
+  if (!text) return [];
+  const key = text
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/\bu\.s\.\b/g, "us")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const aliases = {
+    us: ["United States"],
+    "u s": ["United States"],
+    usa: ["United States"],
+    america: ["United States"],
+    "the united states": ["United States"],
+    "united states": ["United States"],
+    "us in brief": ["The US in Brief"],
+    "u s in brief": ["The US in Brief"],
+    "the us in brief": ["The US in Brief"],
+    "the u s in brief": ["The US in Brief"],
+    "united states in brief": ["The US in Brief"],
+    "the united states in brief": ["The US in Brief"],
+    "world in brief": ["The World in Brief"],
+    "the world in brief": ["The World in Brief"],
+    business: ["Business"],
+    finance: ["Finance and Economics"],
+    "finance economics": ["Finance and Economics"],
+    "finance and economics": ["Finance and Economics"],
+    "middle east africa": ["Middle East and Africa"],
+    "middle east and africa": ["Middle East and Africa"],
+    "science technology": ["Science and Technology"],
+    "science and technology": ["Science and Technology"],
+    tech: ["Science and Technology"],
+    technology: ["Science and Technology"],
+    leaders: ["Leaders"],
+    leader: ["Leaders"],
+    "leader section": ["Leaders"],
+    obituaries: ["Obituary"],
+    obituary: ["Obituary"],
+  };
+  return aliases[key] || [text];
+}
+
+function itemMatchesSection(item, requestedSection) {
+  const requested = sectionComparable(requestedSection);
+  const labels = new Set([item.section, ...item.categories]);
+  if (isUsInBrief(item)) labels.add("The US in Brief");
+  if (isWorldInBrief(item)) labels.add("The World in Brief");
+  if (requested === "us in brief" || requested === "united states in brief") return isUsInBrief(item);
+  if (requested === "united states") {
+    return !isUsInBrief(item) && [...labels].some((label) => sectionComparable(label) === "united states");
+  }
+  for (const label of labels) {
+    const comparable = sectionComparable(label);
+    if (!comparable) continue;
+    if (comparable === requested || comparable.includes(requested) || requested.includes(comparable)) return true;
+  }
+  return false;
+}
+
+function sectionComparable(value) {
+  return normalize(value)
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/\bu\.s\.\b/g, "us")
+    .replace(/^the\s+/, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function categoryFilterUrl(value, categories) {
+  try {
+    const url = new URL(value);
+    url.searchParams.delete("category");
+    url.searchParams.delete("categories");
+    for (const category of rssCategoryFilters(categories)) url.searchParams.append("category", category);
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+function rssCategoryFilters(categories) {
+  const filters = [];
+  for (const category of categories) {
+    const comparable = sectionComparable(category);
+    const rssCategory = comparable === "us in brief" || comparable === "united states in brief" ? "In Brief" : category;
+    if (!filters.includes(rssCategory)) filters.push(rssCategory);
+  }
+  return filters;
+}
+
 function redactedUrl(value, isPrivate) {
   const text = normalize(value);
   if (!text) return "";
@@ -773,4 +1082,12 @@ function toBoolean(value, fallback) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function uniqueStrings(values) {
+  const unique = [];
+  for (const value of values) {
+    if (value && !unique.includes(value)) unique.push(value);
+  }
+  return unique;
 }

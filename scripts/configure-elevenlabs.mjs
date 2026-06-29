@@ -3,11 +3,12 @@ const apiKey = process.env.ELEVENLABS_API_KEY;
 const publicBaseUrl = stripTrailingSlash(process.env.BARTLEBY_PUBLIC_BASE_URL || "");
 const toolToken = process.env.BARTLEBY_TOOL_TOKEN;
 const telephonyFormat = process.env.ELEVENLABS_TELEPHONY_AUDIO_FORMAT || "ulaw_8000";
+const voiceId = process.env.ELEVENLABS_VOICE_ID || "onwK4e9ZLuTAKqWW03F9";
 const agentName = process.env.ELEVENLABS_AGENT_NAME || "Bartleby Economist Bot";
 const postCallWebhookId = process.env.ELEVENLABS_POST_CALL_WEBHOOK_ID || "";
 const firstMessage =
   process.env.ELEVENLABS_FIRST_MESSAGE ||
-  "Hello, this is Bartleby. I have The Economist's latest feed loaded. What would you like to discuss?";
+  "{{bartleby_greeting}}";
 
 if (!apiKey) fail("Missing ELEVENLABS_API_KEY.");
 if (!publicBaseUrl) fail("Missing BARTLEBY_PUBLIC_BASE_URL.");
@@ -54,6 +55,7 @@ conversationConfig.asr = {
 };
 conversationConfig.tts = {
   ...(conversationConfig.tts || {}),
+  voice_id: voiceId,
   agent_output_audio_format: telephonyFormat,
 };
 
@@ -72,6 +74,7 @@ console.log(
     {
       ok: true,
       agent_id: updated.agent_id || agentId,
+      voice_id: voiceId,
       tool_ids: tools.map((tool) => ({
         id: tool.id,
         name: tool.tool_config?.name,
@@ -119,6 +122,7 @@ function toolConfigs() {
       description: "List sections found in The Economist RSS feed from RSS category tags.",
       url: `${publicBaseUrl}/tools/economist/sections`,
       required: [],
+      responseTimeoutSecs: 30,
       requestProperties: {
         refresh: booleanProperty("Whether to force-refresh the Economist RSS feed cache."),
       },
@@ -139,6 +143,7 @@ function toolConfigs() {
         "Return recent Economist RSS articles. Use this first for latest-news questions and section browsing.",
       url: `${publicBaseUrl}/tools/economist/recent`,
       required: [],
+      responseTimeoutSecs: 30,
       requestProperties: articleListRequestProperties(),
       responseDescription: "Recent Economist RSS articles.",
       responseProperties: articleListResponseProperties(),
@@ -149,6 +154,7 @@ function toolConfigs() {
         "Search recent Economist RSS articles by keyword, section/category, and optional date range. Use this before web_search for Economist-grounded questions.",
       url: `${publicBaseUrl}/tools/economist/search`,
       required: [],
+      responseTimeoutSecs: 30,
       requestProperties: {
         ...articleListRequestProperties(),
         query: stringProperty("Keyword or phrase to search for in Economist RSS entries."),
@@ -162,6 +168,7 @@ function toolConfigs() {
         "Retrieve the longest available RSS text for a specific Economist article by entry id or URL.",
       url: `${publicBaseUrl}/tools/economist/article`,
       required: [],
+      responseTimeoutSecs: 30,
       requestProperties: {
         entry_id: stringProperty("Entry id returned by economist_recent or economist_search."),
         article_url: stringProperty("Article URL returned by economist_recent or economist_search."),
@@ -174,7 +181,12 @@ function toolConfigs() {
         status: stringProperty("Status code."),
         answer_text: stringProperty("Compact spoken summary."),
         access_note: stringProperty("Note when the RSS feed only provides an excerpt."),
-        full_article_available: booleanProperty("Whether full article text appears available from the RSS entry."),
+        full_article_available: booleanProperty("Whether full article text appears available."),
+        content_source: stringProperty("Source for the returned text, such as article_txt, feed_content_encoded, feed_description_full_text, or feed_summary."),
+        article_text_status: stringProperty("Status from the private /article.txt companion endpoint, when checked."),
+        full_text_chars: integerProperty("Total available article text characters from the selected source."),
+        returned_text_chars: integerProperty("Number of article text characters returned to the agent."),
+        full_text_truncated: booleanProperty("Whether the returned full_text was truncated by max_text_chars."),
         full_text: stringProperty("Article text or excerpt from RSS."),
         entry: objectProperty("Economist RSS entry.", articleProperty()),
       },
@@ -182,7 +194,7 @@ function toolConfigs() {
     webhookTool({
       name: "web_search",
       description:
-        "Narrow outside-web fallback. Use only when Andrew explicitly asks for information outside The Economist, newer developments beyond an article, or when Economist tools return no relevant material.",
+        "Narrow outside-web fallback. Must be called before answering whenever the caller explicitly asks you to search the web, use outside web context, use the web_search tool, or find information outside The Economist.",
       url: `${publicBaseUrl}/tools/web-search`,
       required: ["query"],
       responseTimeoutSecs: 20,
@@ -207,6 +219,30 @@ function toolConfigs() {
         }),
       },
     }),
+    webhookTool({
+      name: "hang_up",
+      description:
+        "End the current Twilio phone call. Use only after the caller clearly says goodbye or explicitly asks to hang up, disconnect, or end the call.",
+      url: `${publicBaseUrl}/tools/call/hang-up`,
+      required: ["twilio_call_sid", "user_request"],
+      responseTimeoutSecs: 10,
+      forcePreToolSpeech: true,
+      requestProperties: {
+        twilio_call_sid: dynamicStringProperty(
+          "Current Twilio CallSid. This must come from the twilio_call_sid dynamic variable.",
+          "twilio_call_sid"
+        ),
+        user_request: stringProperty("The caller's exact words showing they clearly want to end the call."),
+        reason: stringProperty("Short reason for ending the call."),
+      },
+      responseDescription: "Twilio hang-up result.",
+      responseProperties: {
+        ok: booleanProperty("Whether the hang-up request succeeded."),
+        status: stringProperty("Status code."),
+        twilio_call_sid: stringProperty("Twilio call SID."),
+        answer_text: stringProperty("Compact spoken summary."),
+      },
+    }),
   ];
 }
 
@@ -228,7 +264,9 @@ function configuredPlatformSettings(currentSettings, webhookId) {
 
 function articleListRequestProperties() {
   return {
-    section: stringProperty("Optional Economist section/category such as The World in Brief, The U.S. in Brief, Leaders, Business and Finance, Culture, or Obituary."),
+    section: stringProperty("Optional single Economist section/category. Examples: United States, The US in Brief, Culture, Business, Finance and Economics, Leaders, Britain, Europe, The World in Brief."),
+    category: stringProperty("Alias for section. Use this when the caller says category instead of section."),
+    categories: stringArrayProperty("Optional Economist sections/categories to match any. Examples: Business, Finance and Economics."),
     limit: integerProperty("Maximum entries to return. Use 200 for broad scans and 5 for short spoken lists."),
     start_date: stringProperty("Optional start date."),
     end_date: stringProperty("Optional end date."),
@@ -243,6 +281,7 @@ function articleListResponseProperties() {
     answer_text: stringProperty("Compact spoken summary."),
     query: stringProperty("Search query when applicable."),
     section: stringProperty("Section filter when applicable."),
+    categories: stringArrayProperty("Resolved Economist section/category filters."),
     returned_count: integerProperty("Number of entries returned."),
     items: arrayProperty("Economist RSS entries.", articleProperty()),
   };
@@ -257,7 +296,9 @@ function articleProperty() {
     published_at: stringProperty("Publication timestamp."),
     section: stringProperty("Primary Economist section/category."),
     categories: stringArrayProperty("All RSS category tags."),
+    content_source: stringProperty("RSS source for the entry text, such as feed_content_encoded or feed_summary."),
     full_text_available: booleanProperty("Whether full article text appears available."),
+    reading_time: integerProperty("Estimated reading time in minutes."),
     excerpt: stringProperty("Short excerpt from the RSS entry."),
   };
 }
@@ -327,6 +368,13 @@ function stringProperty(description) {
   };
 }
 
+function dynamicStringProperty(_description, variableName) {
+  return {
+    ...stringProperty(""),
+    dynamic_variable: variableName,
+  };
+}
+
 function integerProperty(description) {
   return {
     type: "integer",
@@ -392,36 +440,51 @@ function objectProperty(description, properties) {
 }
 
 function bartlebyPrompt() {
-  return `You are Bartleby, Andrew's phone-call companion for reading and discussing The Economist.
+  return `You are Bartleby, a phone-call companion for reading and discussing The Economist.
 
 Primary source policy:
 - Default to The Economist RSS tools for article lists, article search, and article discussion.
 - Use the startup context first for latest stories and section browsing.
 - Use economist_recent for follow-up latest-story and section browsing. For broad scans, request limit 200, not 5.
-- Use economist_search for keyword, topic, person, company, country, and date questions.
-- Use economist_article before giving detail on a specific article.
+- For section browsing, pass a section/category filter such as United States, The US in Brief, Culture, Business, Finance and Economics, Leaders, Britain, Europe, or The World in Brief.
+- Keep The US in Brief separate from the United States section. Use section "The US in Brief" for the daily brief and section "United States" for the standard U.S. section.
+- Keep Business separate from Finance and Economics. Use section "Business" for the Business section and section "Finance and Economics" for the Finance and Economics section.
+- Use economist_search for keyword, topic, person, company, country, and date questions, including within a section/category.
+- Use economist_article before giving detail on a specific article or answering whether full article text is available.
+- If the caller asks for more detail, more information, a deeper explanation, or "tell me more" about a specific article or listed item, call economist_article immediately for that article. Do not ask whether they want the full text first.
+- If the caller asks you to use, test, check, or verify tools, make the requested Economist tool calls even when startup context already has enough information.
 - Treat RSS category tags as Economist sections.
 - Mention article title and section when grounding an answer.
 - Say clearly when the RSS feed only provides an excerpt.
 
 Startup context:
-- At the start of every phone call, the webhook injects a startup context before Andrew speaks.
+- At the start of every phone call, the webhook injects a startup context before the caller speaks.
 - This context contains the latest U.S. in Brief entry when present, the latest World in Brief entry when present, and an index of up to 200 recent Economist RSS articles.
 - Use this context before making a tool call or saying that a section/article is missing.
-- If Andrew asks for World in Brief and the startup context says it was not found, say that the configured RSS feed did not include a World in Brief entry in the preloaded recent article index. Do not imply you checked only five articles.
+- The current private RSS feed is an index plus previews for most articles; economist_article can retrieve cached full text through the private article text endpoint.
+- Startup context excerpts are short previews. If the caller asks for more, use economist_article before saying full text is unavailable.
+- If the caller asks for World in Brief and the startup context says it was not found, say that the configured RSS feed did not include a World in Brief entry in the preloaded recent article index. Do not imply you checked only five articles.
 
 Injected startup context:
 {{bartleby_bootstrap_context}}
 
 Outside web search policy:
 - web_search is a narrow fallback, not the default.
-- Use web_search only when Andrew explicitly asks for outside-Economist information, newer developments beyond an Economist article, background not explained by the article, or when Economist tools return no relevant material.
+- Use web_search only when the caller explicitly asks for outside-Economist information, newer developments beyond an Economist article, background not explained by the article, or when Economist tools return no relevant material.
+- Treat phrases like "search the web", "web search", "outside web context", "outside The Economist", "use web_search", and "use the web search tool" as explicit external-search requests.
+- If the caller explicitly asks for an external-search request, call web_search before answering. Do not answer these requests from memory alone, and do not name an outside source or source title until web_search has returned results.
 - When using web_search, say the added context comes from outside The Economist.
+
+Call ending policy:
+- Do not hang up on ambiguous politeness such as "thanks", "okay", "great", or silence.
+- If the caller says something ambiguous that might mean they are finished, ask a brief confirmation question before ending the call.
+- If the caller clearly says goodbye or explicitly asks to hang up, disconnect, or end the call, say a brief goodbye and call hang_up immediately.
+- For hang_up, pass the exact caller phrase as user_request. The twilio_call_sid argument is supplied from the dynamic variable.
 
 Voice style:
 - Be concise and conversational.
 - Start with the answer, then offer to go deeper.
-- Do not read long lists unless Andrew asks.
+- Do not read long lists unless the caller asks.
 - If a tool result includes answer_text, use it as the compact spoken starting point.`;
 }
 

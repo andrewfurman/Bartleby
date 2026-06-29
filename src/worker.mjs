@@ -17,7 +17,10 @@ const XML_HEADERS = {
 };
 
 const OUTSIDE_COVERAGE_MESSAGE =
-  "This number is for Andrew's Bartleby bot and is not available from this caller.";
+  "This number is for Bartleby and is not available from this caller.";
+const DEFAULT_TWILIO_BOOTSTRAP_TIMEOUT_MS = 4500;
+const FALLBACK_STARTUP_GREETING =
+  "Hey, this is the helpful version of Bartleby. What would you like to dive into in today's news?";
 
 export default {
   async fetch(request, env, ctx) {
@@ -38,6 +41,7 @@ export default {
           economist_article: "POST /tools/economist/article",
           economist_bootstrap: "POST /tools/economist/bootstrap",
           web_search: "POST /tools/web-search",
+          hang_up: "POST /tools/call/hang-up",
           admin_conversations: "GET /admin/conversations",
         },
       });
@@ -49,6 +53,7 @@ export default {
         d1_configured: Boolean(env.DB),
         elevenlabs_agent_configured: Boolean(env.ELEVENLABS_API_KEY && env.ELEVENLABS_AGENT_ID),
         economist_rss_configured: Boolean(env.ECONOMIST_RSS_URL || env.ECONOMIST_RSS_CONFIG_JSON),
+        economist_rss_auth_configured: Boolean(env.ECONOMIST_RSS_BEARER_TOKEN || env.ECONOMIST_RSS_AUTH_TOKEN),
         tool_auth_configured: Boolean(env.BARTLEBY_TOOL_TOKEN),
         twilio_webhook_token_configured: Boolean(env.TWILIO_WEBHOOK_TOKEN),
         allowed_callers_configured: parseAllowedCallerNumbers(env.ALLOWED_CALLER_NUMBERS).length > 0,
@@ -106,6 +111,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/tools/web-search") {
       return withToolAuth(request, env, async () => json(await webSearch(env, await requestJson(request))));
+    }
+
+    if (request.method === "POST" && url.pathname === "/tools/call/hang-up") {
+      return withToolAuth(request, env, async () => json(await hangUpCall(env, await requestJson(request))));
     }
 
     if (request.method === "GET" && url.pathname === "/admin/conversations") {
@@ -190,7 +199,8 @@ async function handleTwilioInbound(request, env) {
 
 async function registerElevenLabsCall(env, request, { fromNumber, toNumber, callSid, direction }) {
   const apiBase = env.ELEVENLABS_API_BASE || "https://api.elevenlabs.io";
-  const bootstrap = await economistBootstrap(env, {});
+  const startedAt = Date.now();
+  const bootstrap = await economistBootstrapForTwilio(env);
   const response = await fetch(`${apiBase}/v1/convai/twilio/register-call`, {
     method: "POST",
     headers: {
@@ -210,9 +220,16 @@ async function registerElevenLabsCall(env, request, { fromNumber, toNumber, call
           telephony_audio_format: env.ELEVENLABS_TELEPHONY_AUDIO_FORMAT || "ulaw_8000",
           bartleby_bootstrap_status: bootstrap.ok ? "ok" : bootstrap.status || "error",
           bartleby_bootstrap_context: bootstrap.ok ? bootstrap.context_text : bootstrap.answer_text || "",
+          bartleby_greeting: bootstrap.ok ? bootstrap.greeting || FALLBACK_STARTUP_GREETING : FALLBACK_STARTUP_GREETING,
           bartleby_recent_article_count: bootstrap.ok ? String(bootstrap.recent_article_count) : "0",
           bartleby_us_in_brief_title: bootstrap.ok && bootstrap.us_in_brief ? bootstrap.us_in_brief.title : "",
           bartleby_world_in_brief_title: bootstrap.ok && bootstrap.world_in_brief ? bootstrap.world_in_brief.title : "",
+          bartleby_world_in_brief_published_time:
+            bootstrap.ok && bootstrap.world_in_brief_published_time ? bootstrap.world_in_brief_published_time : "",
+          bartleby_world_in_brief_story_1:
+            bootstrap.ok && bootstrap.world_in_brief_headlines ? bootstrap.world_in_brief_headlines[0] || "" : "",
+          bartleby_world_in_brief_story_2:
+            bootstrap.ok && bootstrap.world_in_brief_headlines ? bootstrap.world_in_brief_headlines[1] || "" : "",
         },
       },
     }),
@@ -224,7 +241,51 @@ async function registerElevenLabsCall(env, request, { fromNumber, toNumber, call
     throw new Error(`ElevenLabs register-call failed (${response.status}): ${text.slice(0, 800)}`);
   }
 
+  await storeTwilioEvent(env, {
+    source: "twilio_inbound",
+    payload: {
+      callSid,
+      bootstrap_status: bootstrap.ok ? "ok" : bootstrap.status || "error",
+      bootstrap_elapsed_ms: Date.now() - startedAt,
+      register_status: response.status,
+    },
+    twilio_call_sid: callSid,
+    event_type: "elevenlabs_register_succeeded",
+    call_status: "registered",
+    caller_number: fromNumber,
+    called_number: toNumber,
+    occurred_at: nowIso(),
+  }).catch(() => {});
+
   return attachStreamStatusCallback(extractTwiml(text, contentType), callbackUrl(request, env, "/twilio/stream-status"));
+}
+
+async function economistBootstrapForTwilio(env) {
+  const timeoutMs = clampInteger(
+    env.BARTLEBY_TWILIO_BOOTSTRAP_TIMEOUT_MS,
+    1000,
+    12000,
+    DEFAULT_TWILIO_BOOTSTRAP_TIMEOUT_MS
+  );
+  const bootstrap = economistBootstrap(env, {}).catch((error) => ({
+    ok: false,
+    status: "bootstrap_error",
+    answer_text: `The Economist RSS startup context failed before the call connected: ${
+      error?.message || String(error)
+    }`,
+  }));
+  const timeout = new Promise((resolve) => {
+    setTimeout(
+      () =>
+        resolve({
+          ok: false,
+          status: "bootstrap_timeout",
+          answer_text: "The Economist RSS feed took too long to load before the call connected.",
+        }),
+      timeoutMs
+    );
+  });
+  return Promise.race([bootstrap, timeout]);
 }
 
 async function handleTwilioStatus(request, env, ctx, source) {
@@ -551,18 +612,21 @@ async function getConversation(env, conversationId) {
   )
     .bind(conversationId)
     .all();
+  const conversation = parseCallRow(call);
   const events = call.twilio_call_sid
     ? await env.DB.prepare("SELECT * FROM twilio_events WHERE twilio_call_sid = ? ORDER BY occurred_at ASC")
         .bind(call.twilio_call_sid)
         .all()
     : { results: [] };
+  const twilioEvents = (events.results || []).map(parseTwilioEventRow);
 
   return json({
     ok: true,
-    conversation: parseCallRow(call),
+    conversation,
+    diagnostics: callDiagnostics(conversation, twilioEvents),
     transcript_turns: (turns.results || []).map(parseTurnRow),
     tool_events: (tools.results || []).map(parseToolRow),
-    twilio_events: (events.results || []).map(parseTwilioEventRow),
+    twilio_events: twilioEvents,
   });
 }
 
@@ -575,11 +639,22 @@ async function getCall(env, callSid) {
   const events = await env.DB.prepare("SELECT * FROM twilio_events WHERE twilio_call_sid = ? ORDER BY occurred_at ASC")
     .bind(callSid)
     .all();
-  return json({ ok: true, conversation: parseCallRow(call), transcript_turns: [], tool_events: [], twilio_events: (events.results || []).map(parseTwilioEventRow) });
+  const conversation = parseCallRow(call);
+  const twilioEvents = (events.results || []).map(parseTwilioEventRow);
+  return json({
+    ok: true,
+    conversation,
+    diagnostics: callDiagnostics(conversation, twilioEvents),
+    transcript_turns: [],
+    tool_events: [],
+    twilio_events: twilioEvents,
+  });
 }
 
 async function webSearch(env, { query = "", max_results: maxResults = 3 } = {}) {
   const normalizedQuery = normalize(query);
+  const boundedMaxResults = clampInteger(maxResults, 1, 8, 3);
+  const providerErrors = [];
   if (!normalizedQuery) {
     return {
       ok: false,
@@ -587,6 +662,26 @@ async function webSearch(env, { query = "", max_results: maxResults = 3 } = {}) 
       answer_text: "A web search query is required.",
       results: [],
     };
+  }
+
+  if (env.WEBSEARCH && typeof env.WEBSEARCH.search === "function") {
+    try {
+      const body = await cloudflareWebSearch(env.WEBSEARCH, normalizedQuery, boundedMaxResults);
+      const results = normalizeSearchResults(body, "cloudflare_websearch").slice(0, boundedMaxResults);
+      if (results.length) {
+        return {
+          ok: true,
+          status: "ok",
+          provider: "cloudflare_websearch",
+          query: normalizedQuery,
+          answer_text: `I found ${results.length} outside web result${results.length === 1 ? "" : "s"}.`,
+          results,
+        };
+      }
+      providerErrors.push("cloudflare_websearch returned no results");
+    } catch (error) {
+      providerErrors.push(`cloudflare_websearch failed: ${error?.message || String(error)}`);
+    }
   }
 
   if (env.TAVILY_API_KEY) {
@@ -604,62 +699,312 @@ async function webSearch(env, { query = "", max_results: maxResults = 3 } = {}) 
       });
       const body = await response.json().catch(() => ({}));
       if (response.ok) {
-        const results = (body.results || []).map((item) => ({
-          title: item.title || "",
-          url: item.url || "",
-          snippet: item.content || item.snippet || "",
-          source: "tavily",
-        }));
-        return {
-          ok: true,
-          status: "ok",
-          provider: "tavily",
-          query: normalizedQuery,
-          answer_text:
-            body.answer ||
-            (results.length ? `I found ${results.length} outside web result${results.length === 1 ? "" : "s"}.` : "I did not find outside web results."),
-          results,
-        };
+        const results = normalizeSearchResults(body, "tavily").slice(0, boundedMaxResults);
+        if (results.length) {
+          return {
+            ok: true,
+            status: "ok",
+            provider: "tavily",
+            query: normalizedQuery,
+            answer_text: body.answer || `I found ${results.length} outside web result${results.length === 1 ? "" : "s"}.`,
+            results,
+          };
+        }
+        providerErrors.push("tavily returned no results");
+      } else {
+        providerErrors.push(`tavily failed with HTTP ${response.status}`);
       }
-    } catch {
-      // Fall back to DuckDuckGo below.
+    } catch (error) {
+      providerErrors.push(`tavily failed: ${error?.message || String(error)}`);
     }
   }
 
+  const instantResults = await duckDuckGoInstantSearch(normalizedQuery, boundedMaxResults).catch((error) => {
+    providerErrors.push(`duckduckgo instant failed: ${error?.message || String(error)}`);
+    return [];
+  });
+  if (instantResults.length) {
+    return {
+      ok: true,
+      status: "ok",
+      provider: "duckduckgo",
+      query: normalizedQuery,
+      answer_text: `I found ${instantResults.length} outside web result${instantResults.length === 1 ? "" : "s"}.`,
+      results: instantResults,
+    };
+  }
+
+  const htmlResults = await duckDuckGoHtmlSearch(normalizedQuery, boundedMaxResults).catch((error) => {
+    providerErrors.push(`duckduckgo html failed: ${error?.message || String(error)}`);
+    return [];
+  });
+  if (htmlResults.length) {
+    return {
+      ok: true,
+      status: "ok",
+      provider: "duckduckgo_html",
+      query: normalizedQuery,
+      answer_text: `I found ${htmlResults.length} outside web result${htmlResults.length === 1 ? "" : "s"}.`,
+      results: htmlResults,
+    };
+  }
+
+  const bingResults = await bingHtmlSearch(normalizedQuery, boundedMaxResults).catch((error) => {
+    providerErrors.push(`bing html failed: ${error?.message || String(error)}`);
+    return [];
+  });
+  if (bingResults.length) {
+    return {
+      ok: true,
+      status: "ok",
+      provider: "bing_html",
+      query: normalizedQuery,
+      answer_text: `I found ${bingResults.length} outside web result${bingResults.length === 1 ? "" : "s"}.`,
+      results: bingResults,
+    };
+  }
+
+  return {
+    ok: false,
+    status: "no_web_results",
+    provider: "none",
+    query: normalizedQuery,
+    answer_text: "I could not find useful outside web results.",
+    provider_errors: providerErrors.slice(0, 5),
+    results: [],
+  };
+}
+
+async function hangUpCall(env, { twilio_call_sid: callSid = "", user_request: userRequest = "", reason = "" } = {}) {
+  const normalizedCallSid = normalize(callSid);
+  const normalizedRequest = normalize(userRequest || reason);
+  if (!normalizedCallSid) {
+    return {
+      ok: false,
+      status: "missing_twilio_call_sid",
+      answer_text: "I cannot hang up because the current Twilio call SID is missing.",
+    };
+  }
+
+  if (!isClearHangupRequest(normalizedRequest)) {
+    return {
+      ok: false,
+      status: "needs_confirmation",
+      twilio_call_sid: normalizedCallSid,
+      answer_text: "Confirm before hanging up. The caller has not clearly asked to end the call.",
+    };
+  }
+
+  const auth = twilioRestAuth(env);
+  if (!auth.ok) {
+    await storeTwilioEvent(env, {
+      source: "hang_up_tool",
+      payload: { status: auth.status, twilio_call_sid: normalizedCallSid, user_request: normalizedRequest },
+      twilio_call_sid: normalizedCallSid,
+      event_type: "hang_up_not_configured",
+      call_status: "hang_up_not_configured",
+      occurred_at: nowIso(),
+    }).catch(() => {});
+    return {
+      ok: false,
+      status: auth.status,
+      twilio_call_sid: normalizedCallSid,
+      answer_text: "I cannot hang up because Twilio REST credentials are not configured.",
+    };
+  }
+
+  const response = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(auth.accountSid)}/Calls/${encodeURIComponent(
+      normalizedCallSid
+    )}.json`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${auth.basic}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ Status: "completed" }),
+    }
+  );
+  const body = await response.json().catch(() => ({}));
+  const ok = response.ok;
+
+  await storeTwilioEvent(env, {
+    source: "hang_up_tool",
+    payload: {
+      twilio_call_sid: normalizedCallSid,
+      user_request: normalizedRequest,
+      upstream_status: response.status,
+      twilio_status: body.status || "",
+      twilio_code: body.code || "",
+      twilio_message: body.message || "",
+    },
+    twilio_call_sid: normalizedCallSid,
+    event_type: ok ? "hang_up_requested" : "hang_up_failed",
+    call_status: ok ? "completed" : "hang_up_failed",
+    occurred_at: nowIso(),
+  }).catch(() => {});
+
+  if (ok) {
+    await upsertCallFromTwilio(env, {
+      twilio_call_sid: normalizedCallSid,
+      status: "completed",
+      ended_at: nowIso(),
+    }).catch(() => {});
+    return {
+      ok: true,
+      status: "completed",
+      twilio_call_sid: normalizedCallSid,
+      answer_text: "Ending the call now.",
+    };
+  }
+
+  return {
+    ok: false,
+    status: "twilio_hang_up_failed",
+    upstream_status: response.status,
+    twilio_call_sid: normalizedCallSid,
+    answer_text: "I tried to hang up, but Twilio did not complete the call.",
+  };
+}
+
+function isClearHangupRequest(value) {
+  const text = normalize(value).toLowerCase();
+  if (!text) return false;
+  if (/\b(hang\s*up|disconnect|end (the |this )?call|terminate (the |this )?call)\b/.test(text)) return true;
+  if (/\b(goodbye|good bye|bye|bye-bye|see you|talk to you later|talk later)\b/.test(text)) return true;
+  return false;
+}
+
+function twilioRestAuth(env) {
+  const accountSid = normalize(env.TWILIO_ACCOUNT_SID);
+  if (!accountSid) return { ok: false, status: "twilio_account_sid_not_configured" };
+
+  const apiKeySid = normalize(env.TWILIO_API_KEY_SID);
+  const apiKeySecret = normalize(env.TWILIO_API_KEY_SECRET);
+  if (apiKeySid && apiKeySecret) {
+    return {
+      ok: true,
+      accountSid,
+      basic: btoa(`${apiKeySid}:${apiKeySecret}`),
+    };
+  }
+
+  const authToken = normalize(env.TWILIO_AUTH_TOKEN);
+  if (authToken) {
+    return {
+      ok: true,
+      accountSid,
+      basic: btoa(`${accountSid}:${authToken}`),
+    };
+  }
+
+  return { ok: false, status: "twilio_rest_credentials_not_configured" };
+}
+
+async function cloudflareWebSearch(binding, query, maxResults) {
+  try {
+    return await binding.search(query, { limit: maxResults });
+  } catch (firstError) {
+    try {
+      return await binding.search({ query, limit: maxResults });
+    } catch {
+      throw firstError;
+    }
+  }
+}
+
+async function duckDuckGoInstantSearch(query, maxResults) {
   const url = new URL("https://api.duckduckgo.com/");
-  url.searchParams.set("q", normalizedQuery);
+  url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
   url.searchParams.set("no_html", "1");
   url.searchParams.set("no_redirect", "1");
   const response = await fetch(url.toString(), {
     headers: { "user-agent": "bartleby-web-search/0.1" },
   });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const body = await response.json().catch(() => ({}));
   const related = flattenDuckDuckGoTopics(body.RelatedTopics || []);
-  const results = [
+  return [
     body.AbstractText
       ? {
-          title: body.Heading || normalizedQuery,
+          title: cleanSearchText(body.Heading || query),
           url: body.AbstractURL || "",
-          snippet: body.AbstractText,
+          snippet: cleanSearchText(body.AbstractText),
           source: body.AbstractSource || "duckduckgo",
         }
       : null,
     ...related,
   ]
-    .filter(Boolean)
-    .slice(0, clampInteger(maxResults, 1, 8, 3));
+    .filter((item) => item?.title || item?.snippet)
+    .slice(0, maxResults);
+}
 
-  return {
-    ok: true,
-    status: "ok",
-    provider: "duckduckgo",
-    query: normalizedQuery,
-    answer_text: results.length
-      ? `I found ${results.length} outside web result${results.length === 1 ? "" : "s"}.`
-      : "I did not find useful outside web results.",
-    results,
-  };
+async function duckDuckGoHtmlSearch(query, maxResults) {
+  const url = new URL("https://html.duckduckgo.com/html/");
+  url.searchParams.set("q", query);
+  const response = await fetch(url.toString(), {
+    headers: { "user-agent": "bartleby-web-search/0.1" },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const html = await response.text();
+  const linkMatches = [
+    ...html.matchAll(/<a\b[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi),
+  ];
+  const snippets = [
+    ...html.matchAll(/<a\b[^>]*class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/a>/gi),
+  ].map((match) => cleanSearchText(match[1]));
+
+  return linkMatches
+    .map((match, index) => ({
+      title: cleanSearchText(match[2]),
+      url: duckDuckGoResultUrl(match[1]),
+      snippet: snippets[index] || "",
+      source: "duckduckgo_html",
+    }))
+    .filter((item) => item.title && item.url)
+    .slice(0, maxResults);
+}
+
+async function bingHtmlSearch(query, maxResults) {
+  const url = new URL("https://www.bing.com/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("count", String(maxResults));
+  const response = await fetch(url.toString(), {
+    headers: { "user-agent": "Mozilla/5.0 bartleby-web-search/0.1" },
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const html = await response.text();
+  const blocks = [...html.matchAll(/<li\b[^>]*class=["'][^"']*b_algo[^"']*["'][\s\S]*?<\/li>/gi)].map(
+    (match) => match[0]
+  );
+
+  return blocks
+    .map((block) => {
+      const link = block.match(/<h2[^>]*>\s*<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/i);
+      const snippet = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+      return {
+        title: cleanSearchText(link?.[2] || ""),
+        url: bingResultUrl(link?.[1] || ""),
+        snippet: cleanSearchText(snippet?.[1] || ""),
+        source: "bing_html",
+      };
+    })
+    .filter((item) => item.title && item.url)
+    .slice(0, maxResults);
+}
+
+function normalizeSearchResults(body, source) {
+  const rawItems = body?.items || body?.results || body?.webPages?.value || [];
+  return rawItems
+    .map((item) => ({
+      title: cleanSearchText(item.title || item.name || item.heading || ""),
+      url: item.url || item.link || item.href || "",
+      snippet: cleanSearchText(item.snippet || item.content || item.description || item.text || ""),
+      source,
+    }))
+    .filter((item) => item.title || item.snippet);
 }
 
 function flattenDuckDuckGoTopics(topics) {
@@ -669,14 +1014,68 @@ function flattenDuckDuckGoTopics(topics) {
       results.push(...flattenDuckDuckGoTopics(topic.Topics));
     } else if (topic.Text || topic.FirstURL) {
       results.push({
-        title: topic.Text?.split(" - ")[0] || topic.FirstURL || "",
+        title: cleanSearchText(topic.Text?.split(" - ")[0] || topic.FirstURL || ""),
         url: topic.FirstURL || "",
-        snippet: topic.Text || "",
+        snippet: cleanSearchText(topic.Text || ""),
         source: "duckduckgo",
       });
     }
   }
   return results;
+}
+
+function duckDuckGoResultUrl(value) {
+  const text = decodeHtmlEntities(String(value || ""));
+  try {
+    const absolute = text.startsWith("//") ? `https:${text}` : text;
+    const url = new URL(absolute);
+    return url.searchParams.get("uddg") || absolute;
+  } catch {
+    return text;
+  }
+}
+
+function bingResultUrl(value) {
+  const text = decodeHtmlEntities(String(value || ""));
+  try {
+    const url = new URL(text);
+    const encoded = url.searchParams.get("u");
+    if (encoded?.startsWith("a1")) {
+      return base64UrlDecode(encoded.slice(2));
+    }
+    return text;
+  } catch {
+    return text;
+  }
+}
+
+function base64UrlDecode(value) {
+  const base64 = String(value || "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(Math.ceil(String(value || "").length / 4) * 4, "=");
+  const binary = atob(base64);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function cleanSearchText(value) {
+  return decodeHtmlEntities(String(value || "").replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)));
 }
 
 function parseCallRow(row) {
@@ -709,6 +1108,86 @@ function parseTwilioEventRow(row) {
     ...row,
     payload: parseMaybeJson(row.payload_json) || {},
   };
+}
+
+function callDiagnostics(call, twilioEvents = []) {
+  const events = Array.isArray(twilioEvents) ? twilioEvents : [];
+  const durationSecs = toInteger(call?.duration_secs, null);
+  const errorEvents = events
+    .filter(isErrorTwilioEvent)
+    .map((event) => ({
+      event_type: event.event_type || "",
+      call_status: event.call_status || "",
+      occurred_at: event.occurred_at || "",
+      message: errorMessageFromTwilioEvent(event),
+    }));
+  const registeredAt = eventTime(events, "elevenlabs_register_succeeded");
+  const streamStartedAt = eventTime(events, "stream-started");
+  const streamStoppedAt = eventTime(events, "stream-stopped");
+  const completedAt =
+    eventTime(events, "completed") || (isTerminalCallStatus(call?.status) ? call?.ended_at || "" : "");
+  const endedNearTenMinuteBoundary =
+    durationSecs !== null && durationSecs >= 595 && durationSecs <= 605 && Boolean(completedAt);
+
+  let status = "ok";
+  const notes = [];
+  if (errorEvents.length) {
+    status = "logged_error";
+    notes.push("One or more Twilio or Worker events contains an error-like status or payload.");
+  } else if (endedNearTenMinuteBoundary && streamStartedAt && streamStoppedAt) {
+    status = "duration_boundary_candidate";
+    notes.push(
+      "No application error was logged. The call streamed successfully and ended near the 10-minute duration boundary."
+    );
+  } else if (completedAt) {
+    notes.push("The call reached a terminal Twilio status without a logged Worker error.");
+  } else {
+    status = "incomplete";
+    notes.push("The stored events do not include a terminal Twilio status yet.");
+  }
+
+  return {
+    status,
+    duration_secs: durationSecs,
+    ended_near_ten_minute_boundary: endedNearTenMinuteBoundary,
+    elevenlabs_registered_at: registeredAt,
+    stream_started_at: streamStartedAt,
+    stream_stopped_at: streamStoppedAt,
+    completed_at: completedAt,
+    error_event_count: errorEvents.length,
+    error_events: errorEvents,
+    notes,
+  };
+}
+
+function isErrorTwilioEvent(event) {
+  const eventType = normalize(event?.event_type).toLowerCase();
+  const callStatus = normalize(event?.call_status).toLowerCase();
+  const payload = event?.payload || {};
+  return (
+    /error|failed|failure|unauthorized|not_configured/.test(eventType) ||
+    /error|failed|failure|unauthorized|not_configured/.test(callStatus) ||
+    Boolean(payload.error || payload.Error || payload.failure_reason || payload.FailureReason || payload.code)
+  );
+}
+
+function errorMessageFromTwilioEvent(event) {
+  const payload = event?.payload || {};
+  return normalize(
+    payload.error ||
+      payload.Error ||
+      payload.message ||
+      payload.Message ||
+      payload.failure_reason ||
+      payload.FailureReason ||
+      payload.code ||
+      payload.Code ||
+      ""
+  );
+}
+
+function eventTime(events, eventType) {
+  return events.find((event) => event.event_type === eventType)?.occurred_at || "";
 }
 
 function sanitizeForStorage(value) {
