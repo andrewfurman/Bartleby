@@ -186,9 +186,11 @@ export async function economistArticle(
   const result = await loadEconomistFeed(env, { refresh });
   if (!result.ok) return result;
 
-  const requestedId = normalize(entryId || id);
-  const requestedUrl = canonicalUrl(url || articleUrl);
-  if (!requestedId && !requestedUrl) {
+  const requestedIds = uniqueStrings([entryId, id].map(normalize));
+  const requestedUrls = uniqueStrings([url, articleUrl, entryId, id].map(canonicalArticleUrl));
+  const requestedId = requestedIds[0] || "";
+  const requestedUrl = requestedUrls[0] || "";
+  if (!requestedIds.length && !requestedUrls.length) {
     return {
       ok: false,
       status: "missing_entry_id",
@@ -198,8 +200,8 @@ export async function economistArticle(
   }
 
   const item = result.items.find((entry) => {
-    if (requestedId && entry.id === requestedId) return true;
-    if (requestedUrl && canonicalUrl(entry.url) === requestedUrl) return true;
+    if (requestedIds.includes(entry.id)) return true;
+    if (requestedUrls.includes(canonicalUrl(entry.url))) return true;
     return false;
   });
 
@@ -1024,6 +1026,19 @@ function canonicalUrl(value) {
     return url.toString();
   } catch {
     return text;
+  }
+}
+
+function canonicalArticleUrl(value) {
+  const text = normalize(value);
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    if (!/^https?:$/.test(url.protocol)) return "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "";
   }
 }
 
