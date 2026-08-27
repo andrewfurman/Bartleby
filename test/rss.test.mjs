@@ -111,7 +111,7 @@ const worldBriefHeadlineFeed = `<?xml version="1.0"?>
       <guid isPermaLink="false">world-brief-guid</guid>
       <pubDate>Thu, 25 Jun 2026 00:00:00 GMT</pubDate>
       <category>The World in Brief</category>
-      <description>${"Full World in Brief description text. ".repeat(40)}</description>
+      <description>The world in brief June 25th 2026 1 of 8 World in Brief: Huge earthquakes hit Venezuela; Apple makes a drastic price hike (updated 3h ago) ${"Full World in Brief description text. ".repeat(40)}</description>
     </item>
     <item>
       <title>A new business strategy</title>
@@ -185,17 +185,42 @@ describe("Economist RSS parsing", () => {
 
   it("builds a short greeting from the top two World in Brief headlines", async () => {
     const env = feedEnv(worldBriefHeadlineFeed);
-    const result = await economistBootstrap(env, { limit: 2, refresh: true });
+    const result = await economistBootstrap(env, {
+      limit: 2,
+      refresh: true,
+      now_ms: Date.parse("2026-06-25T15:30:00Z"),
+    });
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.world_in_brief_headlines, [
       "Huge earthquakes hit Venezuela",
       "Apple makes a drastic price hike",
     ]);
+    assert.equal(result.world_in_brief_updated_at, "2026-06-25T12:30:00.000Z");
+    assert.equal(result.world_in_brief_time_source, "body_relative_update");
+    assert.equal(result.world_in_brief_published_time, "about 8:30 a.m. Eastern Time");
+    assert.equal(result.world_in_brief_updated_time, "about 8:30 a.m. Eastern Time");
+    assert.match(result.context_text, /Last updated: about 8:30 a\.m\. Eastern Time/);
     assert.equal(
       result.greeting,
-      "Here's the latest from The World in Brief as of 8 p.m. Eastern Time: Huge earthquakes hit Venezuela, and Apple makes a drastic price hike. What would you like to dive into?"
+      "Here's the latest from The World in Brief as of about 8:30 a.m. Eastern Time: Huge earthquakes hit Venezuela, and Apple makes a drastic price hike. What would you like to dive into?"
     );
+  });
+
+  it("does not convert midnight UTC World in Brief pubDate into an 8 p.m. Eastern update time", async () => {
+    const env = feedEnv(summaryOnlyPrivateFeed);
+    const result = await economistBootstrap(env, {
+      limit: 1,
+      refresh: true,
+      now_ms: Date.parse("2026-06-25T15:30:00Z"),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.world_in_brief_published_time, "the latest update");
+    assert.equal(result.world_in_brief_updated_time, "the latest update");
+    assert.equal(result.world_in_brief_updated_at, "");
+    assert.equal(result.world_in_brief_time_source, "rss_pubdate_midnight_utc_ignored");
+    assert.doesNotMatch(result.greeting, /8 p\.m\. Eastern Time/);
   });
 
   it("sends bearer auth when configured for a private RSS feed", async () => {

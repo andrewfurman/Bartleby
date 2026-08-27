@@ -121,7 +121,10 @@ export async function economistSearch(
 }
 
 export async function economistBootstrap(env, options = {}) {
-  const result = await loadEconomistFeed(env, { refresh: options.refresh === true });
+  const result = await loadEconomistFeed(env, {
+    refresh: options.refresh === true,
+    now_ms: options.now_ms,
+  });
   if (!result.ok) return result;
 
   const limit = clampInteger(
@@ -143,8 +146,13 @@ export async function economistBootstrap(env, options = {}) {
   const usInBrief = latestBriefEntry(result.items, "us");
   const worldInBrief = latestBriefEntry(result.items, "world");
   const worldInBriefHeadlines = worldInBrief ? worldBriefHeadlines(worldInBrief) : [];
-  const worldInBriefPublishedTime = worldInBriefPublishedLabel(worldInBrief);
-  const contextText = truncate(bootstrapContextText(result, recentArticles, usInBrief, worldInBrief), maxChars);
+  const worldInBriefTime = worldInBriefTimeInfo(worldInBrief, {
+    fetchedAt: result.fetched_at,
+  });
+  const contextText = truncate(
+    bootstrapContextText(result, recentArticles, usInBrief, worldInBrief, worldInBriefTime),
+    maxChars
+  );
 
   return {
     ok: true,
@@ -157,8 +165,13 @@ export async function economistBootstrap(env, options = {}) {
     us_in_brief: usInBrief ? bootstrapEntry(usInBrief, { excerptChars: 900 }) : null,
     world_in_brief: worldInBrief ? bootstrapEntry(worldInBrief, { excerptChars: 900 }) : null,
     world_in_brief_headlines: worldInBriefHeadlines,
-    world_in_brief_published_time: worldInBriefPublishedTime,
-    greeting: greetingText(env.BARTLEBY_GREETING_TEMPLATE, worldInBriefHeadlines, worldInBrief),
+    world_in_brief_published_time: worldInBriefTime.label,
+    world_in_brief_updated_time: worldInBriefTime.label,
+    world_in_brief_updated_at: worldInBriefTime.updated_at,
+    world_in_brief_time_source: worldInBriefTime.source,
+    greeting: greetingText(env.BARTLEBY_GREETING_TEMPLATE, worldInBriefHeadlines, worldInBrief, {
+      fetchedAt: result.fetched_at,
+    }),
     recent_articles: recentArticles,
     context_text: contextText.value,
     context_truncated: contextText.truncated,
@@ -239,7 +252,7 @@ export async function economistArticle(
   };
 }
 
-export async function loadEconomistFeed(env, { refresh = false, categories = [] } = {}) {
+export async function loadEconomistFeed(env, { refresh = false, categories = [], now_ms: nowMs } = {}) {
   const config = economistFeedConfig(env, { categories });
   if (!config.url) {
     return {
@@ -250,7 +263,7 @@ export async function loadEconomistFeed(env, { refresh = false, categories = [] 
     };
   }
 
-  const now = Date.now();
+  const now = finiteNumber(nowMs) ?? Date.now();
   if (
     !refresh &&
     feedCache?.ok &&
@@ -567,12 +580,12 @@ function truncateHeadline(value) {
   return truncate(text, 160).value;
 }
 
-function greetingText(template, headlines, worldInBrief) {
+function greetingText(template, headlines, worldInBrief, options = {}) {
   const story1 = normalize(headlines?.[0]);
   const story2 = normalize(headlines?.[1]);
   if (!story1) return FALLBACK_GREETING;
   const stories = story2 ? `${story1}, and ${story2}` : story1;
-  const publishedTime = worldInBriefPublishedLabel(worldInBrief);
+  const publishedTime = worldInBriefTimeInfo(worldInBrief, options).label;
   return normalize(template || DEFAULT_GREETING_TEMPLATE)
     .replace(/\{story_1\}/g, story1)
     .replace(/\{story_2\}/g, story2)
@@ -581,11 +594,91 @@ function greetingText(template, headlines, worldInBrief) {
     .replace(/\{published_at\}/g, normalize(worldInBrief?.published_at || worldInBrief?.updated_at));
 }
 
-function worldInBriefPublishedLabel(item) {
-  const date = new Date(item?.published_at || item?.updated_at || "");
-  if (Number.isNaN(date.getTime())) return "the latest update";
-  const easternTime = formatTimeInZone(date, "America/New_York");
-  return `${easternTime} Eastern Time`;
+function worldInBriefTimeInfo(item, { fetchedAt = "" } = {}) {
+  if (!item) return { label: "the latest update", updated_at: "", source: "missing_item" };
+
+  const bodyUpdatedAt = worldInBriefBodyUpdatedAt(item, fetchedAt);
+  if (bodyUpdatedAt.updated_at) {
+    return {
+      label: `${bodyUpdatedAt.approximate ? "about " : ""}${formatTimeInZone(
+        new Date(bodyUpdatedAt.updated_at),
+        "America/New_York"
+      )} Eastern Time`,
+      updated_at: bodyUpdatedAt.updated_at,
+      source: bodyUpdatedAt.source,
+    };
+  }
+
+  const updatedAt = parseDate(item.updated_at);
+  if (updatedAt) {
+    return {
+      label: `${formatTimeInZone(updatedAt, "America/New_York")} Eastern Time`,
+      updated_at: updatedAt.toISOString(),
+      source: "rss_updated",
+    };
+  }
+
+  const publishedAt = parseDate(item.published_at);
+  if (publishedAt && !isMidnightUtc(publishedAt)) {
+    return {
+      label: `${formatTimeInZone(publishedAt, "America/New_York")} Eastern Time`,
+      updated_at: "",
+      source: "rss_pubdate",
+    };
+  }
+
+  return {
+    label: "the latest update",
+    updated_at: "",
+    source: publishedAt ? "rss_pubdate_midnight_utc_ignored" : "missing_time",
+  };
+}
+
+function worldInBriefBodyUpdatedAt(item, fetchedAt) {
+  const fetchedDate = parseDate(fetchedAt);
+  if (!fetchedDate) return { updated_at: "", source: "", approximate: false };
+
+  const text = normalize([item.title, item.summary, item.full_text].filter(Boolean).join(" "));
+  const relative = text.match(/\bupdated\s+(?:(just now|moments ago)|(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\s+ago)\b/i);
+  if (!relative) return { updated_at: "", source: "", approximate: false };
+
+  const instantText = relative[1];
+  if (instantText) {
+    return {
+      updated_at: fetchedDate.toISOString(),
+      source: "body_relative_update",
+      approximate: true,
+    };
+  }
+
+  const amount = Number.parseInt(relative[2], 10);
+  if (!Number.isFinite(amount)) return { updated_at: "", source: "", approximate: false };
+
+  const unit = relative[3].toLowerCase();
+  const multiplier =
+    unit.startsWith("m") ? 60_000 : unit.startsWith("h") ? 60 * 60_000 : 24 * 60 * 60_000;
+  return {
+    updated_at: new Date(fetchedDate.getTime() - amount * multiplier).toISOString(),
+    source: "body_relative_update",
+    approximate: true,
+  };
+}
+
+function parseDate(value) {
+  const text = normalize(value);
+  if (!text) return null;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
+function isMidnightUtc(date) {
+  return (
+    date.getUTCHours() === 0 &&
+    date.getUTCMinutes() === 0 &&
+    date.getUTCSeconds() === 0 &&
+    date.getUTCMilliseconds() === 0
+  );
 }
 
 function formatTimeInZone(date, timeZone) {
@@ -674,7 +767,11 @@ function articleTextEndpointUrl(config, item) {
   }
 }
 
-function bootstrapContextText(result, recentArticles, usInBrief, worldInBrief) {
+function bootstrapContextText(result, recentArticles, usInBrief, worldInBrief, worldInBriefTime) {
+  const worldInBriefTimeLine =
+    worldInBrief && worldInBriefTime?.label
+      ? `Last updated: ${worldInBriefTime.label}. Time source: ${worldInBriefTime.source}.`
+      : "";
   const lines = [
     "Bartleby startup context from The Economist RSS feed.",
     `Feed: ${result.feed.title || result.feed.id}. Fetched at: ${result.fetched_at}. Source entries parsed: ${result.item_count}.`,
@@ -686,7 +783,9 @@ function bootstrapContextText(result, recentArticles, usInBrief, worldInBrief) {
     "",
     "Latest World in Brief:",
     worldInBrief
-      ? articleContextLine(bootstrapEntry(worldInBrief, { excerptChars: 700 }))
+      ? [articleContextLine(bootstrapEntry(worldInBrief, { excerptChars: 700 })), worldInBriefTimeLine]
+          .filter(Boolean)
+          .join(" ")
       : "Not found in the configured RSS feed. If asked, say the current RSS feed did not include a World in Brief entry in the preloaded recent article index.",
     "",
     `Most recent ${recentArticles.length} Economist RSS articles:`,
@@ -1066,6 +1165,11 @@ function clampInteger(value, min, max, fallback) {
   const number = Number.parseInt(value, 10);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, number));
+}
+
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function truncate(value, maxChars) {
