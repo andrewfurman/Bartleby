@@ -328,6 +328,19 @@ describe("Economist RSS parsing", () => {
     assert.match(article.full_text, /Full text about America/);
   });
 
+  it("returns article text when ElevenLabs sends a URL in entry_id", async () => {
+    const env = feedEnv(sampleFeed);
+    const articleUrl = "https://www.economist.com/united-states/2026/06/24/example";
+    const article = await economistArticle(env, {
+      entry_id: articleUrl,
+      refresh: true,
+    });
+
+    assert.equal(article.ok, true);
+    assert.equal(article.entry.url, articleUrl);
+    assert.match(article.full_text, /Full text about America/);
+  });
+
   it("uses the private article.txt endpoint when RSS only has a preview", async () => {
     const fullText = "The world in brief\n\n" + "Full cached World in Brief text from the article endpoint. ".repeat(30);
     const articleUrl = "https://www.economist.com/the-world-in-brief/2026/06/25/bfae92f7-f8a6-432d-b284-d3eb0fb451c9";
