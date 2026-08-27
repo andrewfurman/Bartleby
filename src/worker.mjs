@@ -226,6 +226,10 @@ async function registerElevenLabsCall(env, request, { fromNumber, toNumber, call
           bartleby_world_in_brief_title: bootstrap.ok && bootstrap.world_in_brief ? bootstrap.world_in_brief.title : "",
           bartleby_world_in_brief_published_time:
             bootstrap.ok && bootstrap.world_in_brief_published_time ? bootstrap.world_in_brief_published_time : "",
+          bartleby_world_in_brief_updated_time:
+            bootstrap.ok && bootstrap.world_in_brief_updated_time ? bootstrap.world_in_brief_updated_time : "",
+          bartleby_world_in_brief_time_source:
+            bootstrap.ok && bootstrap.world_in_brief_time_source ? bootstrap.world_in_brief_time_source : "",
           bartleby_world_in_brief_story_1:
             bootstrap.ok && bootstrap.world_in_brief_headlines ? bootstrap.world_in_brief_headlines[0] || "" : "",
           bartleby_world_in_brief_story_2:

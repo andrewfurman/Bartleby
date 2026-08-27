@@ -294,6 +294,7 @@ function articleProperty() {
     url: stringProperty("Article URL."),
     author: stringProperty("Author when available."),
     published_at: stringProperty("Publication timestamp."),
+    updated_at: stringProperty("Updated timestamp when the RSS feed provides one."),
     section: stringProperty("Primary Economist section/category."),
     categories: stringArrayProperty("All RSS category tags."),
     content_source: stringProperty("RSS source for the entry text, such as feed_content_encoded or feed_summary."),

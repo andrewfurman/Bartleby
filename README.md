@@ -17,6 +17,7 @@ Bartleby is not affiliated with, endorsed by, or sponsored by *The Economist*.
 - Use RSS `category` tags as first-class section metadata when present, including sections such as `The World in Brief`, `The US in Brief`, `Leaders`, `United States`, `Business`, `Finance and Economics`, `Culture`, and `Obituary`.
 - Fall back to conservative Economist URL/title section inference when public feeds omit category tags.
 - Preload startup context for each call: latest U.S. in Brief if present, latest World in Brief if present, and up to 200 recent Economist RSS articles.
+- For The World in Brief greeting, prefer the article body's `updated X ago` marker or RSS `<updated>` timestamp before `pubDate`; midnight UTC `pubDate` values are treated as date placeholders, not spoken as 8 p.m. Eastern updates.
 - Retrieve article text from the configured RSS feed when the feed provides it.
 - Default to *The Economist* RSS feed for answers; use web search only when the caller explicitly asks for outside context or the feed clearly cannot answer.
 - Keep private feed URLs, tokens, caller allow-list numbers, and provider credentials outside the public repository.
