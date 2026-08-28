@@ -599,18 +599,6 @@ function greetingText(template, headlines, worldInBrief, options = {}) {
 function worldInBriefTimeInfo(item, { fetchedAt = "" } = {}) {
   if (!item) return { label: "the latest update", updated_at: "", source: "missing_item" };
 
-  const bodyUpdatedAt = worldInBriefBodyUpdatedAt(item, fetchedAt);
-  if (bodyUpdatedAt.updated_at) {
-    return {
-      label: `${bodyUpdatedAt.approximate ? "about " : ""}${formatTimeInZone(
-        new Date(bodyUpdatedAt.updated_at),
-        "America/New_York"
-      )} Eastern Time`,
-      updated_at: bodyUpdatedAt.updated_at,
-      source: bodyUpdatedAt.source,
-    };
-  }
-
   const updatedAt = parseDate(item.updated_at);
   if (updatedAt) {
     return {
@@ -624,8 +612,20 @@ function worldInBriefTimeInfo(item, { fetchedAt = "" } = {}) {
   if (publishedAt && !isMidnightUtc(publishedAt)) {
     return {
       label: `${formatTimeInZone(publishedAt, "America/New_York")} Eastern Time`,
-      updated_at: "",
+      updated_at: publishedAt.toISOString(),
       source: "rss_pubdate",
+    };
+  }
+
+  const bodyUpdatedAt = worldInBriefBodyUpdatedAt(item, fetchedAt);
+  if (bodyUpdatedAt.updated_at) {
+    return {
+      label: `${bodyUpdatedAt.approximate ? "about " : ""}${formatTimeInZone(
+        new Date(bodyUpdatedAt.updated_at),
+        "America/New_York"
+      )} Eastern Time`,
+      updated_at: bodyUpdatedAt.updated_at,
+      source: bodyUpdatedAt.source,
     };
   }
 

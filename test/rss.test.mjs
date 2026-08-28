@@ -207,6 +207,26 @@ describe("Economist RSS parsing", () => {
     );
   });
 
+  it("prefers a non-midnight World in Brief pubDate over relative body text", async () => {
+    const feed = worldBriefHeadlineFeed.replace(
+      "Thu, 25 Jun 2026 00:00:00 GMT",
+      "Thu, 25 Jun 2026 13:15:00 GMT"
+    );
+    const env = feedEnv(feed);
+    const result = await economistBootstrap(env, {
+      limit: 2,
+      refresh: true,
+      now_ms: Date.parse("2026-06-25T15:30:00Z"),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.world_in_brief_updated_at, "2026-06-25T13:15:00.000Z");
+    assert.equal(result.world_in_brief_time_source, "rss_pubdate");
+    assert.equal(result.world_in_brief_updated_time, "9:15 a.m. Eastern Time");
+    assert.match(result.greeting, /9:15 a\.m\. Eastern Time/);
+    assert.doesNotMatch(result.greeting, /8:30 a\.m\. Eastern Time/);
+  });
+
   it("does not convert midnight UTC World in Brief pubDate into an 8 p.m. Eastern update time", async () => {
     const env = feedEnv(summaryOnlyPrivateFeed);
     const result = await economistBootstrap(env, {
