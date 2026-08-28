@@ -64,7 +64,7 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/twilio/inbound") {
-      return handleTwilioInbound(request, env);
+      return handleTwilioInbound(request, env, ctx);
     }
 
     if (request.method === "POST" && url.pathname === "/twilio/status") {
@@ -135,7 +135,7 @@ export default {
   },
 };
 
-async function handleTwilioInbound(request, env) {
+async function handleTwilioInbound(request, env, ctx) {
   if (!isValidTwilioRequest(request, env)) {
     return xml(sayTwiml("Unauthorized."), 403);
   }
@@ -145,26 +145,27 @@ async function handleTwilioInbound(request, env) {
   const toNumber = body.To || body.Called || body.to_number || body.toNumber || env.TWILIO_PHONE_NUMBER || "";
   const callSid = body.CallSid || body.call_sid || body.callSid || "";
 
-  await storeTwilioEvent(env, {
-    source: "twilio_inbound",
-    payload: body,
-    twilio_call_sid: callSid,
-    event_type: "inbound",
-    call_status: body.CallStatus || "ringing",
-    caller_number: fromNumber,
-    called_number: toNumber,
-    occurred_at: nowIso(),
-  });
-
   const allowed = isAllowedCaller(fromNumber, env.ALLOWED_CALLER_NUMBERS);
-  await upsertCallFromTwilio(env, {
-    twilio_call_sid: callSid,
-    caller_number: fromNumber,
-    called_number: toNumber,
-    direction: "inbound",
-    status: body.CallStatus || "ringing",
-    allowlist_result: allowed ? "allowed" : "rejected",
-  });
+  backgroundAllSettled(ctx, [
+    storeTwilioEvent(env, {
+      source: "twilio_inbound",
+      payload: body,
+      twilio_call_sid: callSid,
+      event_type: "inbound",
+      call_status: body.CallStatus || "ringing",
+      caller_number: fromNumber,
+      called_number: toNumber,
+      occurred_at: nowIso(),
+    }),
+    upsertCallFromTwilio(env, {
+      twilio_call_sid: callSid,
+      caller_number: fromNumber,
+      called_number: toNumber,
+      direction: "inbound",
+      status: body.CallStatus || "ringing",
+      allowlist_result: allowed ? "allowed" : "rejected",
+    }),
+  ]);
 
   if (!allowed) {
     return xml(sayTwiml(env.OUTSIDE_COVERAGE_MESSAGE || OUTSIDE_COVERAGE_MESSAGE));
@@ -175,7 +176,7 @@ async function handleTwilioInbound(request, env) {
   }
 
   try {
-    const twiml = await registerElevenLabsCall(env, request, {
+    const twiml = await registerElevenLabsCall(env, request, ctx, {
       fromNumber,
       toNumber,
       callSid,
@@ -183,24 +184,28 @@ async function handleTwilioInbound(request, env) {
     });
     return xml(twiml);
   } catch (error) {
-    await storeTwilioEvent(env, {
-      source: "twilio_inbound",
-      payload: { error: error?.message || String(error), callSid },
-      twilio_call_sid: callSid,
-      event_type: "elevenlabs_register_failed",
-      call_status: "failed",
-      caller_number: fromNumber,
-      called_number: toNumber,
-      occurred_at: nowIso(),
-    });
+    backgroundAllSettled(ctx, [
+      storeTwilioEvent(env, {
+        source: "twilio_inbound",
+        payload: { error: error?.message || String(error), callSid },
+        twilio_call_sid: callSid,
+        event_type: "elevenlabs_register_failed",
+        call_status: "failed",
+        caller_number: fromNumber,
+        called_number: toNumber,
+        occurred_at: nowIso(),
+      }),
+    ]);
     return xml(sayTwiml("Bartleby could not connect the voice agent. Please try again later."));
   }
 }
 
-async function registerElevenLabsCall(env, request, { fromNumber, toNumber, callSid, direction }) {
+async function registerElevenLabsCall(env, request, ctx, { fromNumber, toNumber, callSid, direction }) {
   const apiBase = env.ELEVENLABS_API_BASE || "https://api.elevenlabs.io";
   const startedAt = Date.now();
   const bootstrap = await economistBootstrapForTwilio(env);
+  const bootstrapElapsedMs = Date.now() - startedAt;
+  const registerStartedAt = Date.now();
   const response = await fetch(`${apiBase}/v1/convai/twilio/register-call`, {
     method: "POST",
     headers: {
@@ -244,22 +249,27 @@ async function registerElevenLabsCall(env, request, { fromNumber, toNumber, call
   if (!response.ok) {
     throw new Error(`ElevenLabs register-call failed (${response.status}): ${text.slice(0, 800)}`);
   }
+  const registerElapsedMs = Date.now() - registerStartedAt;
 
-  await storeTwilioEvent(env, {
-    source: "twilio_inbound",
-    payload: {
-      callSid,
-      bootstrap_status: bootstrap.ok ? "ok" : bootstrap.status || "error",
-      bootstrap_elapsed_ms: Date.now() - startedAt,
-      register_status: response.status,
-    },
-    twilio_call_sid: callSid,
-    event_type: "elevenlabs_register_succeeded",
-    call_status: "registered",
-    caller_number: fromNumber,
-    called_number: toNumber,
-    occurred_at: nowIso(),
-  }).catch(() => {});
+  backgroundAllSettled(ctx, [
+    storeTwilioEvent(env, {
+      source: "twilio_inbound",
+      payload: {
+        callSid,
+        bootstrap_status: bootstrap.ok ? "ok" : bootstrap.status || "error",
+        bootstrap_elapsed_ms: bootstrapElapsedMs,
+        register_elapsed_ms: registerElapsedMs,
+        total_setup_elapsed_ms: Date.now() - startedAt,
+        register_status: response.status,
+      },
+      twilio_call_sid: callSid,
+      event_type: "elevenlabs_register_succeeded",
+      call_status: "registered",
+      caller_number: fromNumber,
+      called_number: toNumber,
+      occurred_at: nowIso(),
+    }),
+  ]);
 
   return attachStreamStatusCallback(extractTwiml(text, contentType), callbackUrl(request, env, "/twilio/stream-status"));
 }
@@ -325,6 +335,15 @@ async function handleTwilioStatus(request, env, ctx, source) {
   else await Promise.allSettled(tasks);
 
   return json({ ok: true });
+}
+
+function backgroundAllSettled(ctx, tasks) {
+  const pending = Promise.allSettled(tasks);
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(pending);
+  } else {
+    pending.catch(() => {});
+  }
 }
 
 async function handleElevenLabsPostCall(request, env, ctx) {

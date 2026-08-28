@@ -3,6 +3,54 @@ import { describe, it } from "node:test";
 import worker from "../src/worker.mjs";
 
 describe("Worker tools", () => {
+  it("does not block inbound Twilio TwiML on D1 call logging", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchCalls = [];
+    const waitUntilTasks = [];
+    globalThis.fetch = async (url, options = {}) => {
+      fetchCalls.push({ url: String(url), options });
+      return new Response(
+        `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="wss://example.com/audio"/></Connect></Response>`,
+        { status: 200, headers: { "content-type": "application/xml" } }
+      );
+    };
+
+    try {
+      const response = await Promise.race([
+        worker.fetch(
+          new Request("https://bartleby.example/twilio/inbound?token=twilio-token", {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              CallSid: "CA123",
+              From: "+12034709996",
+              To: "+19599911122",
+              CallStatus: "ringing",
+            }),
+          }),
+          {
+            DB: neverSettlingD1(),
+            TWILIO_WEBHOOK_TOKEN: "twilio-token",
+            ELEVENLABS_API_KEY: "elevenlabs-key",
+            ELEVENLABS_AGENT_ID: "agent-123",
+          },
+          { waitUntil: (task) => waitUntilTasks.push(task) }
+        ),
+        timeoutReject(250, "Inbound Twilio request waited for D1 logging."),
+      ]);
+      const text = await response.text();
+
+      assert.equal(response.status, 200);
+      assert.match(text, /<Response>/);
+      assert.match(text, /<Stream statusCallback=/);
+      assert.equal(fetchCalls.length, 1);
+      assert.match(fetchCalls[0].url, /\/v1\/convai\/twilio\/register-call$/);
+      assert.equal(waitUntilTasks.length, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("falls back to DuckDuckGo HTML results for outside web search", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (url) => {
@@ -258,6 +306,32 @@ function fakeD1({ calls = [], twilio_events: twilioEvents = [] } = {}) {
       };
     },
   };
+}
+
+function neverSettlingD1() {
+  return {
+    prepare() {
+      return {
+        bind() {
+          return {
+            async first() {
+              return new Promise(() => {});
+            },
+            async all() {
+              return new Promise(() => {});
+            },
+            async run() {
+              return new Promise(() => {});
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+function timeoutReject(ms, message) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms));
 }
 
 function eventRow(callSid, eventType, callStatus, occurredAt, payload = {}) {
